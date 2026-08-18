@@ -2296,7 +2296,9 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
     ? {
         role: "button" as const,
         tabIndex: 0 as const,
-        "aria-label": displayText,
+        // Reasoning previews carry the full thinking text (up to 20k); the
+        // accessible name must stay a label, not a transcript.
+        "aria-label": displayText.length > 200 ? `${displayText.slice(0, 200)}…` : displayText,
         onClick: () => setExpanded((v) => !v),
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
           if (e.key === "Enter" || e.key === " ") {
