@@ -597,6 +597,44 @@ describe("buildThreadFeed", () => {
     });
   });
 
+  it("hides reasoning rows that never accumulated thinking text", () => {
+    const turnId = TurnId.make("turn-reasoning-empty");
+    const thread = makeThread({
+      id: ThreadId.make("thread-reasoning-empty"),
+      projectId: ProjectId.make("project-1"),
+      title: "Redacted thinking",
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+      activities: [
+        makeActivity({
+          id: EventId.make("reasoning-empty"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Reasoning",
+          createdAt: "2026-04-01T00:00:05.000Z",
+          turnId,
+          payload: {
+            title: "Reasoning",
+            itemType: "reasoning",
+            status: "completed",
+          },
+        }),
+      ],
+    });
+
+    // No thinking text (e.g. redacted_thinking): the row stays neutral and
+    // the presentation filter keeps it out of the feed.
+    const feed = buildThreadFeed(thread);
+    const presented = deriveThreadFeedPresentation(feed, thread.latestTurn, new Set());
+    expect(presented.filter((entry) => entry.type === "activity-group")).toHaveLength(0);
+  });
+
   it("collapses a streamed reasoning update chain into one live row", () => {
     const turnId = TurnId.make("turn-reasoning-stream");
     const reasoningUpdate = (id: string, createdAt: string, detail: string) =>

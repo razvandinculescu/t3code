@@ -288,9 +288,11 @@ export function workEntryIndicatesToolSuccess(entry: WorkLogEntry): boolean {
 export function workEntryIndicatesToolNeutralStatus(entry: WorkLogEntry): boolean {
   // Reasoning rows have no tool outcome; the neutral filter would hide the
   // live thinking row for the entire turn (in-progress rows classify as
-  // neutral and both timeline builders drop them).
+  // neutral and both timeline builders drop them). Reasoning items with no
+  // thinking text (e.g. redacted_thinking blocks) stay neutral so they are
+  // still hidden instead of rendering a bare "Reasoning" row.
   if (entry.itemType === "reasoning") {
-    return false;
+    return (entry.detail?.trim().length ?? 0) === 0;
   }
   // Spawn CTA rows are never neutral-hidden: mid-run they derive from
   // task.progress (tone "thinking") and the neutral filter was swallowing

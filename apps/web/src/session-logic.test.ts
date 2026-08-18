@@ -752,6 +752,24 @@ describe("workEntryIndicatesToolFailure", () => {
     expect(
       workEntryIndicatesToolNeutralStatus({ ...reasoningBase, toolLifecycleStatus: "completed" }),
     ).toBe(false);
+    // A reasoning row with no thinking text (e.g. redacted_thinking) stays
+    // neutral so the empty-row filter still hides it.
+    expect(
+      workEntryIndicatesToolNeutralStatus({
+        ...base,
+        label: "Reasoning",
+        tone: "tool" as const,
+        itemType: "reasoning" as const,
+        toolLifecycleStatus: "completed",
+      }),
+    ).toBe(true);
+    expect(
+      workEntryIndicatesToolNeutralStatus({
+        ...reasoningBase,
+        detail: "   ",
+        toolLifecycleStatus: "completed",
+      }),
+    ).toBe(true);
   });
 });
 

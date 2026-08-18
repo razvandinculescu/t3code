@@ -631,9 +631,11 @@ function workEntryIndicatesToolSuccess(entry: WorkLogEntry): boolean {
 function workEntryStatus(entry: WorkLogEntry): ThreadFeedActivity["status"] {
   // Reasoning rows have no tool outcome: no failure heuristic (above), no
   // success affordance, and never "neutral" — the neutral filter would hide
-  // the live thinking row for the whole turn.
+  // the live thinking row for the whole turn. Exception: a reasoning item
+  // with no thinking text (e.g. redacted_thinking) stays neutral so the
+  // empty-row filter still hides it instead of rendering a bare row.
   if (entry.itemType === "reasoning") {
-    return null;
+    return (entry.detail?.trim().length ?? 0) === 0 ? "neutral" : null;
   }
   if (!workLogEntryIsToolLike(entry)) {
     return null;
