@@ -2247,9 +2247,13 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const reasoningExpandedByDefault = useClientSettings(
     (settings) => settings.reasoningExpandedByDefault,
   );
-  const [expanded, setExpanded] = useState(
-    () => workEntry.itemType === "reasoning" && reasoningExpandedByDefault,
-  );
+  const reasoningAutoExpanded = workEntry.itemType === "reasoning" && reasoningExpandedByDefault;
+  const [expanded, setExpanded] = useState(reasoningAutoExpanded);
+  // The setting hydrates asynchronously and can change while rows are mounted;
+  // keep the row's expanded state in sync with it.
+  useEffect(() => {
+    setExpanded(reasoningAutoExpanded);
+  }, [reasoningAutoExpanded]);
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);

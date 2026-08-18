@@ -552,12 +552,19 @@ export function deriveMessagesTimelineRows(input: {
           // (review finding: concatenating two filtered lists moved a
           // mid-group spawn row above earlier tool rows).
           const overflowCandidates = visibleGroupedEntries.filter(
-            (entry) => entry.agentSpawn === undefined,
+            (entry) =>
+              entry.agentSpawn === undefined &&
+              // With "reasoning expanded by default" on, thinking rows stay
+              // out of the "+N tool calls" overflow as well as out of the fold.
+              !(input.reasoningExpandedByDefault && entry.itemType === "reasoning"),
           );
           const hiddenEntries = overflowCandidates.slice(0, -MAX_VISIBLE_WORK_LOG_ENTRIES);
           const hiddenIds = new Set(hiddenEntries.map((entry) => entry.id));
           const visibleEntries = visibleGroupedEntries.filter(
-            (entry) => entry.agentSpawn !== undefined || !hiddenIds.has(entry.id),
+            (entry) =>
+              entry.agentSpawn !== undefined ||
+              (input.reasoningExpandedByDefault && entry.itemType === "reasoning") ||
+              !hiddenIds.has(entry.id),
           );
           const renderedEntries = expanded ? visibleGroupedEntries : visibleEntries;
 
