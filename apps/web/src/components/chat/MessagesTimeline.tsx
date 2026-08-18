@@ -2093,6 +2093,8 @@ function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
       return "hammer";
     case "collab_agent_tool_call":
       return "bot";
+    case "reasoning":
+      return "message-circle";
   }
 
   // Subagent lifecycle rows (grouped by taskId) get agent identity chrome.

@@ -742,6 +742,67 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("collapses the reasoning update chain into one row with the final thinking text", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "reasoning-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Reasoning started",
+        tone: "tool",
+        payload: {
+          itemType: "reasoning",
+          status: "inProgress",
+        },
+      }),
+      makeActivity({
+        id: "reasoning-updated-1",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.updated",
+        summary: "Reasoning",
+        tone: "tool",
+        payload: {
+          itemType: "reasoning",
+          status: "inProgress",
+          detail: "Let me think",
+          data: { toolCallId: "reasoning-item-1" },
+        },
+      }),
+      makeActivity({
+        id: "reasoning-updated-2",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.updated",
+        summary: "Reasoning",
+        tone: "tool",
+        payload: {
+          itemType: "reasoning",
+          status: "inProgress",
+          detail: "Let me think step by step",
+          data: { toolCallId: "reasoning-item-1" },
+        },
+      }),
+      makeActivity({
+        id: "reasoning-completed",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "tool.completed",
+        summary: "Reasoning",
+        tone: "tool",
+        payload: {
+          itemType: "reasoning",
+          status: "completed",
+          detail: "Let me think step by step about the answer",
+          data: { toolCallId: "reasoning-item-1" },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities);
+    expect(entries.length).toBe(1);
+    expect(entries[0]?.itemType).toBe("reasoning");
+    expect(entries[0]?.detail).toBe("Let me think step by step about the answer");
+    expect(entries[0]?.toolLifecycleStatus).toBe("completed");
+  });
+
   it("omits task.started but shows task.progress and task.completed", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

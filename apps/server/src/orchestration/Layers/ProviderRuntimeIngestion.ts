@@ -211,6 +211,20 @@ function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 
+// Reasoning items carry the model's full thinking text as their detail —
+// truncating that to the tool-card default would make them useless.
+const REASONING_DETAIL_LIMIT = 20_000;
+
+function isActivityItemType(value: string): boolean {
+  return isToolLifecycleItemType(value) || value === "reasoning";
+}
+
+function truncateActivityDetail(itemType: string, detail: string): string {
+  return itemType === "reasoning"
+    ? truncateDetail(detail, REASONING_DETAIL_LIMIT)
+    : truncateDetail(detail);
+}
+
 function normalizeProposedPlanMarkdown(planMarkdown: string | undefined): string | undefined {
   const trimmed = planMarkdown?.trim();
   if (!trimmed) {
@@ -784,7 +798,7 @@ export function runtimeEventToActivities(
     }
 
     case "item.updated": {
-      if (!isToolLifecycleItemType(event.payload.itemType)) {
+      if (!isActivityItemType(event.payload.itemType)) {
         return [];
       }
       // A streaming update's `data` carries the full tool output accumulated
@@ -804,7 +818,9 @@ export function runtimeEventToActivities(
           payload: {
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.detail
+              ? { detail: truncateActivityDetail(event.payload.itemType, event.payload.detail) }
+              : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
             ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
             ...(event.payload.parentToolUseId
@@ -818,7 +834,7 @@ export function runtimeEventToActivities(
     }
 
     case "item.completed": {
-      if (!isToolLifecycleItemType(event.payload.itemType)) {
+      if (!isActivityItemType(event.payload.itemType)) {
         return [];
       }
       return [
@@ -830,7 +846,9 @@ export function runtimeEventToActivities(
           summary: event.payload.title ?? "Tool",
           payload: {
             itemType: event.payload.itemType,
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.detail
+              ? { detail: truncateActivityDetail(event.payload.itemType, event.payload.detail) }
+              : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
             ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
             ...(event.payload.parentToolUseId
@@ -844,7 +862,7 @@ export function runtimeEventToActivities(
     }
 
     case "item.started": {
-      if (!isToolLifecycleItemType(event.payload.itemType)) {
+      if (!isActivityItemType(event.payload.itemType)) {
         return [];
       }
       return [
@@ -856,7 +874,9 @@ export function runtimeEventToActivities(
           summary: `${event.payload.title ?? "Tool"} started`,
           payload: {
             itemType: event.payload.itemType,
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.detail
+              ? { detail: truncateActivityDetail(event.payload.itemType, event.payload.detail) }
+              : {}),
             ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
             ...(event.payload.parentToolUseId
               ? { parentToolUseId: event.payload.parentToolUseId }
