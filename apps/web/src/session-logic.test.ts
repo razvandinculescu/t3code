@@ -719,6 +719,18 @@ describe("workEntryIndicatesToolFailure", () => {
       }),
     ).toBe(false);
   });
+
+  it("never treats reasoning rows as failures, even when thinking quotes errors", () => {
+    expect(
+      workEntryIndicatesToolFailure({
+        ...base,
+        label: "Reasoning",
+        tone: "tool",
+        itemType: "reasoning",
+        detail: "The previous attempt failed with exit code 1: command not found",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("deriveWorkLogEntries", () => {

@@ -1031,8 +1031,8 @@ describe("ClaudeAdapterLive", () => {
         },
       } as unknown as SDKMessage);
 
-      // Long enough to cross the live-update throttle (256 chars) exactly once.
-      const longThought = "x".repeat(300);
+      // Long enough to cross the live-update throttle (512 chars) exactly once.
+      const longThought = "x".repeat(600);
       harness.query.emit({
         type: "stream_event",
         session_id: "sdk-session-1",
@@ -1111,7 +1111,7 @@ describe("ClaudeAdapterLive", () => {
       const reasoningUpdates = runtimeEvents.filter(
         (event) => event.type === "item.updated" && event.payload.itemType === "reasoning",
       );
-      // First text goes out immediately; the 300-char delta crosses the
+      // First text goes out immediately; the 600-char delta crosses the
       // live-update throttle once more.
       assert.equal(reasoningUpdates.length, 2);
       const firstUpdate = reasoningUpdates[0];

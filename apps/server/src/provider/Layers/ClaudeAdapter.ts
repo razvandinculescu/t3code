@@ -175,8 +175,14 @@ interface ReasoningBlockState {
  * any thinking text exists: upstream (or a proxying shim) may deliver thinking
  * in multi-hundred-char bursts seconds apart, and a pure size threshold would
  * hold the first visible text hostage until 256 chars accumulate.
+ *
+ * Each emitted `item.updated` persists the full accumulated thinking (capped at
+ * the ingestion limit), so the per-block storage cost grows quadratically with
+ * 1/CHUNK. 512 chars keeps the live row visibly streaming (a handful of updates
+ * per second at typical thinking speeds) while bounding that cost ~10x tighter
+ * than a per-delta threshold would.
  */
-const REASONING_UPDATE_CHUNK = 64;
+const REASONING_UPDATE_CHUNK = 512;
 
 interface PendingApproval {
   readonly requestType: CanonicalRequestType;

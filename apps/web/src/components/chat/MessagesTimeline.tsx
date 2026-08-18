@@ -47,6 +47,7 @@ import {
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
+  BrainIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -1947,6 +1948,7 @@ function formatWorkingTimerNow(startIso: string): string {
 
 type WorkEntryIconName =
   | "bot"
+  | "brain"
   | "check"
   | "circle-alert"
   | "eye"
@@ -1963,6 +1965,8 @@ function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; classN
   switch (name) {
     case "bot":
       return <BotIcon className={className} aria-hidden />;
+    case "brain":
+      return <BrainIcon className={className} aria-hidden />;
     case "check":
       return <CheckIcon className={className} aria-hidden />;
     case "circle-alert":
@@ -2100,7 +2104,7 @@ function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
     case "collab_agent_tool_call":
       return "bot";
     case "reasoning":
-      return "message-circle";
+      return "brain";
   }
 
   // Subagent lifecycle rows (grouped by taskId) get agent identity chrome.

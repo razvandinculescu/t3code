@@ -225,6 +225,12 @@ function toolDetailTextLooksLikeFailure(text: string): boolean {
 
 /** True when the row should show a failure affordance (explicit status/tone or error-shaped tool output). */
 export function workEntryIndicatesToolFailure(entry: WorkLogEntry): boolean {
+  // Reasoning rows carry the model's prose as detail; running the tool-output
+  // failure heuristic over it would flag any quoted error ("exit code 1") as
+  // a tool failure even though nothing failed.
+  if (entry.itemType === "reasoning") {
+    return false;
+  }
   if (entry.tone === "error") {
     return true;
   }
