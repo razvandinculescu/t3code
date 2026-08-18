@@ -1111,8 +1111,15 @@ describe("ClaudeAdapterLive", () => {
       const reasoningUpdates = runtimeEvents.filter(
         (event) => event.type === "item.updated" && event.payload.itemType === "reasoning",
       );
-      assert.equal(reasoningUpdates.length, 1);
-      const reasoningUpdate = reasoningUpdates[0];
+      // First text goes out immediately; the 300-char delta crosses the
+      // live-update throttle once more.
+      assert.equal(reasoningUpdates.length, 2);
+      const firstUpdate = reasoningUpdates[0];
+      if (firstUpdate?.type === "item.updated") {
+        assert.equal(String(firstUpdate.itemId), String(reasoningItemId));
+        assert.equal(firstUpdate.payload.detail, "Let me ");
+      }
+      const reasoningUpdate = reasoningUpdates[1];
       if (reasoningUpdate?.type === "item.updated") {
         assert.equal(String(reasoningUpdate.itemId), String(reasoningItemId));
         assert.equal(reasoningUpdate.payload.detail, `Let me ${longThought}`);
@@ -1293,7 +1300,7 @@ describe("ClaudeAdapterLive", () => {
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 13).pipe(
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 14).pipe(
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -1405,6 +1412,7 @@ describe("ClaudeAdapterLive", () => {
           "thread.started",
           "item.started",
           "content.delta",
+          "item.updated",
           "item.started",
           "item.updated",
           "item.updated",

@@ -170,8 +170,13 @@ interface ReasoningBlockState {
   lastEmittedLength: number;
 }
 
-/** Emit a live `item.updated` for a reasoning block at most every N accumulated chars. */
-const REASONING_UPDATE_CHUNK = 256;
+/**
+ * Live reasoning updates are throttled, but the FIRST one goes out as soon as
+ * any thinking text exists: upstream (or a proxying shim) may deliver thinking
+ * in multi-hundred-char bursts seconds apart, and a pure size threshold would
+ * hold the first visible text hostage until 256 chars accumulate.
+ */
+const REASONING_UPDATE_CHUNK = 64;
 
 interface PendingApproval {
   readonly requestType: CanonicalRequestType;
@@ -2642,7 +2647,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         const reasoningBlock = reasoningBlockEntry?.block;
         if (
           reasoningBlock &&
-          reasoningBlock.text.length - reasoningBlock.lastEmittedLength >= REASONING_UPDATE_CHUNK
+          (reasoningBlock.lastEmittedLength === 0 ||
+            reasoningBlock.text.length - reasoningBlock.lastEmittedLength >= REASONING_UPDATE_CHUNK)
         ) {
           reasoningBlock.lastEmittedLength = reasoningBlock.text.length;
           const updateStamp = yield* makeEventStamp();
