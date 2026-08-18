@@ -54,6 +54,8 @@ export interface ThreadFeedActivity {
     | "wrench"
     | "zap";
   readonly toolLike: boolean;
+  /** toolLike minus reasoning: gates the "N tool calls" group label. */
+  readonly toolCall: boolean;
   readonly status: "success" | "failure" | "neutral" | null;
 }
 
@@ -1369,7 +1371,7 @@ function appendPresentedFeedEntry(
     groupId,
     hiddenCount,
     expanded,
-    onlyToolActivities: activities.every((activity) => activity.toolLike),
+    onlyToolActivities: activities.every((activity) => activity.toolCall),
   });
 }
 
@@ -1597,6 +1599,7 @@ export function buildThreadFeed(
               getCopyText,
               icon: workEntryIcon(entry),
               toolLike: workLogEntryIsToolLike(entry),
+              toolCall: workLogEntryIsToolLike(entry) && entry.itemType !== "reasoning",
               status: workEntryStatus(entry),
             },
           };

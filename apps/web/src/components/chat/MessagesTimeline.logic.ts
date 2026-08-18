@@ -2,7 +2,7 @@ import * as Equal from "effect/Equal";
 import {
   formatDuration,
   workEntryIndicatesToolNeutralStatus,
-  workLogEntryIsToolLike,
+  workLogEntryIsToolCall,
   type TimelineEntry,
   type TurnPlanEntry,
   type WorkLogEntry,
@@ -586,7 +586,7 @@ export function deriveMessagesTimelineRows(input: {
               hiddenCount: hiddenEntries.length,
               expanded,
               onlyToolEntries: visibleGroupedEntries.every((entry) =>
-                workLogEntryIsToolLike(entry),
+                workLogEntryIsToolCall(entry),
               ),
             });
           }

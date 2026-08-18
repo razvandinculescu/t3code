@@ -177,6 +177,15 @@ export function workLogEntryIsToolLike(entry: WorkLogEntry): boolean {
   return entry.itemType !== undefined && isToolLifecycleItemType(entry.itemType);
 }
 
+/**
+ * Stricter than tool-like for the "N tool calls" group labels: reasoning rows
+ * are tool-like for styling, but they are not tool calls and must not inflate
+ * the count.
+ */
+export function workLogEntryIsToolCall(entry: WorkLogEntry): boolean {
+  return entry.itemType !== "reasoning" && workLogEntryIsToolLike(entry);
+}
+
 /** Heuristic: providers often emit successful lifecycle status while error text lives in `detail` / `command`. */
 function toolDetailTextLooksLikeFailure(text: string): boolean {
   const t = text.toLowerCase();

@@ -711,6 +711,7 @@ describe("buildThreadFeed", () => {
       getCopyText: () => id,
       icon: "command",
       toolLike: true,
+      toolCall: true,
       status,
     });
     const feed: ThreadFeedEntry[] = [
