@@ -597,6 +597,52 @@ describe("buildThreadFeed", () => {
     });
   });
 
+  it("collapses a streamed reasoning update chain into one live row", () => {
+    const turnId = TurnId.make("turn-reasoning-stream");
+    const reasoningUpdate = (id: string, createdAt: string, detail: string) =>
+      makeActivity({
+        id: EventId.make(id),
+        kind: "tool.updated",
+        tone: "tool",
+        summary: "Reasoning",
+        createdAt,
+        turnId,
+        payload: {
+          title: "Reasoning",
+          itemType: "reasoning",
+          status: "inProgress",
+          detail,
+          data: { toolCallId: "reasoning-item-1" },
+        },
+      });
+    const thread = makeThread({
+      id: ThreadId.make("thread-reasoning-stream"),
+      projectId: ProjectId.make("project-1"),
+      title: "Thinking",
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+      activities: [
+        reasoningUpdate("rs-1", "2026-04-01T00:00:02.000Z", "Let me"),
+        reasoningUpdate("rs-2", "2026-04-01T00:00:03.000Z", "Let me think"),
+        reasoningUpdate("rs-3", "2026-04-01T00:00:04.000Z", "Let me think about this"),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    expect(feed).toHaveLength(1);
+    // The whole chain folds into a single row carrying the latest text.
+    expect(feed[0]).toMatchObject({
+      type: "activity-group",
+      activities: [{ detail: "Let me think about this", icon: "brain" }],
+    });
+  });
+
   it("appends active work as a normal timeline row", () => {
     const startedAt = "2026-04-01T00:00:01.000Z";
     const presented = deriveThreadFeedPresentation([], null, new Set(), new Set(), startedAt);

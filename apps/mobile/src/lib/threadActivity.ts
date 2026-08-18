@@ -81,6 +81,7 @@ interface WorkLogEntry {
 interface DerivedWorkLogEntry extends WorkLogEntry {
   activityKind: OrchestrationThreadActivity["kind"];
   collapseKey?: string;
+  toolCallId?: string;
   /** Grouping key for subagent lifecycle rows (one row per agent). */
   taskId?: string;
 }
@@ -392,6 +393,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   };
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
+  const toolCallId = asTrimmedString(asRecord(payload?.data)?.toolCallId);
   if (
     !taskDetailAsLabel &&
     payload &&
@@ -423,6 +425,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (itemType) {
     entry.itemType = itemType;
+  }
+  if (toolCallId) {
+    entry.toolCallId = toolCallId;
   }
   if (requestKind) {
     entry.requestKind = requestKind;
@@ -502,6 +507,7 @@ function mergeDerivedWorkLogEntries(
   const itemType = next.itemType ?? previous.itemType;
   const requestKind = next.requestKind ?? previous.requestKind;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
+  const toolCallId = next.toolCallId ?? previous.toolCallId;
   const toolLifecycleStatus = next.toolLifecycleStatus ?? previous.toolLifecycleStatus;
   const toolData = next.toolData ?? previous.toolData;
   return {
@@ -515,6 +521,7 @@ function mergeDerivedWorkLogEntries(
     ...(itemType ? { itemType } : {}),
     ...(requestKind ? { requestKind } : {}),
     ...(collapseKey ? { collapseKey } : {}),
+    ...(toolCallId ? { toolCallId } : {}),
     ...(toolLifecycleStatus ? { toolLifecycleStatus } : {}),
     ...(toolData !== undefined ? { toolData } : {}),
   };
@@ -534,6 +541,12 @@ function mergeChangedFiles(
 function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | undefined {
   if (entry.activityKind !== "tool.updated" && entry.activityKind !== "tool.completed") {
     return undefined;
+  }
+  // An explicit toolCallId (adapters emit one for streaming items like
+  // reasoning) is a stable identity across the whole update chain; keying on
+  // the growing detail instead would render every update as its own row.
+  if (entry.toolCallId) {
+    return `tool:${entry.toolCallId}`;
   }
   const normalizedLabel = normalizeCompactToolLabel(entry.toolTitle ?? entry.label);
   const detail = entry.detail?.trim() ?? "";
