@@ -42,6 +42,7 @@ export interface ThreadFeedActivity {
   readonly icon:
     | "agent"
     | "alert"
+    | "brain"
     | "check"
     | "command"
     | "edit"
@@ -71,7 +72,7 @@ interface WorkLogEntry {
   changedFiles?: ReadonlyArray<string>;
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
-  itemType?: ToolLifecycleItemType;
+  itemType?: ToolLifecycleItemType | "reasoning";
   requestKind?: PendingApproval["requestKind"];
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   toolData?: unknown;
@@ -581,6 +582,12 @@ function toolDetailTextLooksLikeFailure(text: string): boolean {
 }
 
 function workEntryIndicatesToolFailure(entry: WorkLogEntry): boolean {
+  // Reasoning rows carry the model's prose as detail; running the tool-output
+  // failure heuristic over it would flag any quoted error ("exit code 1") as
+  // a tool failure even though nothing failed.
+  if (entry.itemType === "reasoning") {
+    return false;
+  }
   if (entry.tone === "error") {
     return true;
   }
@@ -640,6 +647,7 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
   if (entry.itemType === "dynamic_tool_call" || entry.itemType === "collab_agent_tool_call") {
     return "hammer";
   }
+  if (entry.itemType === "reasoning") return "brain";
   if (entry.tone === "error") return "alert";
   if (entry.tone === "thinking") return "agent";
   if (entry.tone === "info") return "check";
@@ -955,7 +963,10 @@ function stripTrailingExitCode(value: string): {
 function extractWorkLogItemType(
   payload: Record<string, unknown> | null,
 ): WorkLogEntry["itemType"] | undefined {
-  if (typeof payload?.itemType === "string" && isToolLifecycleItemType(payload.itemType)) {
+  if (
+    typeof payload?.itemType === "string" &&
+    (isToolLifecycleItemType(payload.itemType) || payload.itemType === "reasoning")
+  ) {
     return payload.itemType;
   }
   return undefined;

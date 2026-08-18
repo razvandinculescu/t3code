@@ -558,6 +558,45 @@ describe("buildThreadFeed", () => {
     });
   });
 
+  it("never marks reasoning rows as failures when thinking quotes errors", () => {
+    const turnId = TurnId.make("turn-reasoning");
+    const thread = makeThread({
+      id: ThreadId.make("thread-reasoning"),
+      projectId: ProjectId.make("project-1"),
+      title: "Thinking",
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+      activities: [
+        makeActivity({
+          id: EventId.make("reasoning-1"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Reasoning",
+          createdAt: "2026-04-01T00:00:05.000Z",
+          turnId,
+          payload: {
+            title: "Reasoning",
+            itemType: "reasoning",
+            detail: "The previous attempt failed with exit code 1: command not found",
+            status: "completed",
+          },
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    expect(feed[0]).toMatchObject({
+      type: "activity-group",
+      activities: [{ status: "success", icon: "brain" }],
+    });
+  });
+
   it("appends active work as a normal timeline row", () => {
     const startedAt = "2026-04-01T00:00:01.000Z";
     const presented = deriveThreadFeedPresentation([], null, new Set(), new Set(), startedAt);
