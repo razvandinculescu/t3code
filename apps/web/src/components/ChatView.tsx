@@ -4128,6 +4128,9 @@ function ChatViewContent(props: ChatViewProps) {
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
   const autoSettleOnMerge = useClientSettings((settings) => settings.sidebarAutoSettleOnMerge);
+  const reasoningExpandedByDefault = useClientSettings(
+    (settings) => settings.reasoningExpandedByDefault,
+  );
   const activeThreadPr = resolveDisplayedThreadPr({
     threadBranch: activeThread?.branch ?? null,
     gitStatus: gitStatusQuery.data ?? null,
@@ -6337,6 +6340,7 @@ function ChatViewContent(props: ChatViewProps) {
                 onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                 topFadeEnabled={!hasTimelineTopBanner}
+                reasoningExpandedByDefault={reasoningExpandedByDefault}
                 loadEarlier={loadEarlierTurns}
               />
 

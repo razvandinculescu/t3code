@@ -324,6 +324,7 @@ function deriveTurnFolds(input: {
   terminalAssistantMessageIds: ReadonlySet<string>;
   latestTurn: TimelineLatestTurn | null;
   unsettledTurnId: TurnId | null;
+  reasoningExpandedByDefault?: boolean | undefined;
 }): ReadonlyMap<string, TurnFold> {
   interface TurnGroup {
     entries: Array<TimelineEntry>;
@@ -398,6 +399,15 @@ function deriveTurnFolds(input: {
       if (entry.kind === "work" && entry.entry.agentSpawn !== undefined) {
         continue;
       }
+      // With "reasoning expanded by default" on, thinking blocks stay out of
+      // the fold so their text remains visible after the turn settles.
+      if (
+        input.reasoningExpandedByDefault &&
+        entry.kind === "work" &&
+        entry.entry.itemType === "reasoning"
+      ) {
+        continue;
+      }
       hiddenEntryIds.add(entry.id);
     }
     if (hiddenEntryIds.size === 0) {
@@ -456,6 +466,7 @@ export function deriveMessagesTimelineRows(input: {
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
+  reasoningExpandedByDefault?: boolean;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
   const durationStartByMessageId = computeMessageDurationStart(
@@ -471,6 +482,7 @@ export function deriveMessagesTimelineRows(input: {
     terminalAssistantMessageIds,
     latestTurn: input.latestTurn ?? null,
     unsettledTurnId,
+    reasoningExpandedByDefault: input.reasoningExpandedByDefault,
   });
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorEntryId.values()) {

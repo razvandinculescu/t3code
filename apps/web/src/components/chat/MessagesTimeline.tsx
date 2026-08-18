@@ -66,6 +66,7 @@ import {
   ZapIcon,
 } from "lucide-react";
 import { Button } from "../ui/button";
+import { useClientSettings } from "../../hooks/useSettings";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
@@ -240,6 +241,8 @@ interface MessagesTimelineProps {
   onManualNavigation: () => void;
   hideEmptyPlaceholder?: boolean;
   topFadeEnabled?: boolean;
+  /** Keep reasoning (thinking) rows out of the turn fold (client setting). */
+  reasoningExpandedByDefault?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
 }
@@ -280,6 +283,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onManualNavigation,
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
+  reasoningExpandedByDefault = false,
   loadEarlier = null,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
@@ -406,6 +410,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
+        reasoningExpandedByDefault,
       }),
     [
       timelineEntries,
@@ -417,6 +422,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
+      reasoningExpandedByDefault,
     ],
   );
   const rows = useStableRows(rawRows);
@@ -2234,7 +2240,12 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
 }) {
   const { workEntry, workspaceRoot } = props;
   const activity = use(TimelineRowActivityCtx);
-  const [expanded, setExpanded] = useState(false);
+  const reasoningExpandedByDefault = useClientSettings(
+    (settings) => settings.reasoningExpandedByDefault,
+  );
+  const [expanded, setExpanded] = useState(
+    () => workEntry.itemType === "reasoning" && reasoningExpandedByDefault,
+  );
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);

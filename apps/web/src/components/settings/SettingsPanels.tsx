@@ -497,6 +497,10 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Auto-settle merged threads"]
         : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
+      ...(settings.reasoningExpandedByDefault !==
+      DEFAULT_UNIFIED_SETTINGS.reasoningExpandedByDefault
+        ? ["Thinking blocks expanded"]
+        : []),
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
         ? ["Diff whitespace changes"]
@@ -1962,6 +1966,33 @@ export function GeneralSettingsPanel() {
                 </SelectItem>
               </SelectPopup>
             </Select>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("reasoning-expanded")}
+          description="Keep thinking (reasoning) blocks unfolded after a turn finishes and show their full text expanded, instead of folding them into the turn's “Worked for …” row."
+          resetAction={
+            settings.reasoningExpandedByDefault !==
+            DEFAULT_UNIFIED_SETTINGS.reasoningExpandedByDefault ? (
+              <SettingResetButton
+                label="thinking blocks expansion"
+                onClick={() =>
+                  updateSettings({
+                    reasoningExpandedByDefault: DEFAULT_UNIFIED_SETTINGS.reasoningExpandedByDefault,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.reasoningExpandedByDefault}
+              onCheckedChange={(checked) =>
+                updateSettings({ reasoningExpandedByDefault: Boolean(checked) })
+              }
+              aria-label="Implicitly expanded thinking blocks"
+            />
           }
         />
 
