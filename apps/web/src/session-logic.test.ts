@@ -731,6 +731,28 @@ describe("workEntryIndicatesToolFailure", () => {
       }),
     ).toBe(false);
   });
+
+  it("keeps reasoning rows out of the tool success and neutral affordances", () => {
+    const reasoningBase = {
+      ...base,
+      label: "Reasoning",
+      tone: "tool" as const,
+      itemType: "reasoning" as const,
+      detail: "thinking…",
+    };
+    // A completed reasoning row must not claim the tool "Completed" check.
+    expect(
+      workEntryIndicatesToolSuccess({ ...reasoningBase, toolLifecycleStatus: "completed" }),
+    ).toBe(false);
+    // An in-progress reasoning row must not classify as neutral — the neutral
+    // filter would hide the live thinking row for the whole turn.
+    expect(
+      workEntryIndicatesToolNeutralStatus({ ...reasoningBase, toolLifecycleStatus: "inProgress" }),
+    ).toBe(false);
+    expect(
+      workEntryIndicatesToolNeutralStatus({ ...reasoningBase, toolLifecycleStatus: "completed" }),
+    ).toBe(false);
+  });
 });
 
 describe("deriveWorkLogEntries", () => {

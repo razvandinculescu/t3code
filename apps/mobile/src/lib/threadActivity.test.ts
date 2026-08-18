@@ -593,7 +593,7 @@ describe("buildThreadFeed", () => {
     const feed = buildThreadFeed(thread);
     expect(feed[0]).toMatchObject({
       type: "activity-group",
-      activities: [{ status: "success", icon: "brain" }],
+      activities: [{ status: null, icon: "brain" }],
     });
   });
 

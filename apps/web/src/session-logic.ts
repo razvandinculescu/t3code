@@ -257,6 +257,11 @@ export function workEntryIndicatesToolFailure(entry: WorkLogEntry): boolean {
 
 /** Tool/command row completed without failure (blue check affordance). */
 export function workEntryIndicatesToolSuccess(entry: WorkLogEntry): boolean {
+  // Reasoning is not a tool call; it must never claim the tool success
+  // affordance ("Completed" check).
+  if (entry.itemType === "reasoning") {
+    return false;
+  }
   if (!workLogEntryIsToolLike(entry)) {
     return false;
   }
@@ -281,6 +286,12 @@ export function workEntryIndicatesToolSuccess(entry: WorkLogEntry): boolean {
 
 /** Tool-like row with neither clear success nor failure (empty, incomplete, in progress, etc.). */
 export function workEntryIndicatesToolNeutralStatus(entry: WorkLogEntry): boolean {
+  // Reasoning rows have no tool outcome; the neutral filter would hide the
+  // live thinking row for the entire turn (in-progress rows classify as
+  // neutral and both timeline builders drop them).
+  if (entry.itemType === "reasoning") {
+    return false;
+  }
   // Spawn CTA rows are never neutral-hidden: mid-run they derive from
   // task.progress (tone "thinking") and the neutral filter was swallowing
   // them exactly while the fleet ran — the one moment they matter most.
