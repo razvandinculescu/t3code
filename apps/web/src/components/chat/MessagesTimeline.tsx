@@ -1358,18 +1358,23 @@ const WorkGroupSection = memo(function WorkGroupSection({
     () => groupedEntries.filter((entry) => !workEntryIndicatesToolNeutralStatus(entry)),
     [groupedEntries],
   );
-  const onlyToolEntries = nonEmptyEntries.every((entry) => workLogEntryIsToolCall(entry));
-  const groupLabel = onlyToolEntries
-    ? nonEmptyEntries.length === 1
-      ? "1 tool call"
-      : `${nonEmptyEntries.length} tool calls`
-    : "Work Log";
+  // The visible "Work Log" heading keeps gating on tool-*like* membership so
+  // groups that interleave reasoning with tool rows render no new chrome,
+  // while the count wording excludes reasoning rows (they are not tool calls).
+  const onlyToolLikeEntries = nonEmptyEntries.every((entry) => workLogEntryIsToolLike(entry));
+  const toolCallCount = nonEmptyEntries.filter(workLogEntryIsToolCall).length;
+  const groupLabel =
+    toolCallCount === 0
+      ? "Work Log"
+      : toolCallCount === 1
+        ? "1 tool call"
+        : `${toolCallCount} tool calls`;
 
   if (nonEmptyEntries.length === 0) return null;
 
   return (
     <section className="-mx-1 space-y-0.5 px-1 py-0.5" aria-label={groupLabel}>
-      {!onlyToolEntries && (
+      {!onlyToolLikeEntries && (
         <p className="px-0.5 pb-0.5 font-medium text-secondary-label text-[11px]">{groupLabel}</p>
       )}
       <div className="space-y-px">
