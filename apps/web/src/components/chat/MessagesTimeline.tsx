@@ -1359,16 +1359,19 @@ const WorkGroupSection = memo(function WorkGroupSection({
     [groupedEntries],
   );
   // The visible "Work Log" heading keeps gating on tool-*like* membership so
-  // groups that interleave reasoning with tool rows render no new chrome,
-  // while the count wording excludes reasoning rows (they are not tool calls).
+  // groups that interleave reasoning with tool rows render no new chrome.
+  // The count wording excludes reasoning rows (they are not tool calls) and
+  // only applies to all-tool-like groups; mixed groups keep the plain
+  // "Work Log" label rather than claiming a tool-call count above non-tool
+  // rows.
   const onlyToolLikeEntries = nonEmptyEntries.every((entry) => workLogEntryIsToolLike(entry));
   const toolCallCount = nonEmptyEntries.filter(workLogEntryIsToolCall).length;
   const groupLabel =
-    toolCallCount === 0
-      ? "Work Log"
-      : toolCallCount === 1
+    onlyToolLikeEntries && toolCallCount > 0
+      ? toolCallCount === 1
         ? "1 tool call"
-        : `${toolCallCount} tool calls`;
+        : `${toolCallCount} tool calls`
+      : "Work Log";
 
   if (nonEmptyEntries.length === 0) return null;
 
