@@ -1204,6 +1204,78 @@ describe("ProviderRuntimeIngestion", () => {
     expect(completedData?.toolCallId).toBe("item-reasoning-1");
   });
 
+  it("drops reasoning events without a renderable title (Codex summaryPartAdded shape)", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    // Codex emits reasoning updates with no title and no data.toolCallId;
+    // persisting them would create unlabeled "Tool updated" rows clients
+    // cannot fold, so they stay dropped until the adapter emits Claude's shape.
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-codex-reasoning-updated"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-codex-reasoning"),
+      itemId: asItemId("item-codex-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        data: { itemId: "item-codex-reasoning-1", summaryIndex: 0, text: "partial summary" },
+      },
+    });
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-codex-reasoning-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-codex-reasoning"),
+      itemId: asItemId("item-codex-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+      },
+    });
+
+    // A renderable reasoning event in the same turn proves only the
+    // unrenderable ones were dropped.
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-claude-reasoning-completed"),
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-codex-reasoning"),
+      itemId: asItemId("item-claude-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        title: "Reasoning",
+        detail: "done thinking",
+        data: { toolCallId: "item-claude-reasoning-1" },
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-claude-reasoning-completed",
+      ),
+    );
+
+    expect(
+      thread.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-codex-reasoning-updated",
+      ),
+    ).toBe(false);
+    expect(
+      thread.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-codex-reasoning-completed",
+      ),
+    ).toBe(false);
+  });
+
   it("normalizes command execution activities to ran-command summaries", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

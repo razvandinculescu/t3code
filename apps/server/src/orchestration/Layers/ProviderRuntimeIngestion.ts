@@ -219,6 +219,29 @@ function isActivityItemType(value: string): boolean {
   return isToolLifecycleItemType(value) || value === "reasoning";
 }
 
+/**
+ * Reasoning items are only renderable when the adapter emits the shape
+ * clients can fold: a stable title (Claude always sends "Reasoning"; updates
+ * and completions also carry data.toolCallId). Other providers' reasoning
+ * events — e.g. Codex `item/reasoning/summaryPartAdded` — have neither, and
+ * letting them through would persist unlabeled "Tool updated" rows that no
+ * client can collapse. Until those adapters emit the renderable shape, their
+ * reasoning events stay dropped (the behavior before reasoning passed the
+ * item-lifecycle guard).
+ */
+function isSupportedItemActivity(
+  itemType: string,
+  payload: { readonly title?: string | undefined },
+): boolean {
+  if (!isActivityItemType(itemType)) {
+    return false;
+  }
+  if (itemType === "reasoning" && typeof payload.title !== "string") {
+    return false;
+  }
+  return true;
+}
+
 function truncateActivityDetail(itemType: string, detail: string): string {
   return itemType === "reasoning"
     ? truncateDetail(detail, REASONING_DETAIL_LIMIT)
@@ -798,7 +821,7 @@ export function runtimeEventToActivities(
     }
 
     case "item.updated": {
-      if (!isActivityItemType(event.payload.itemType)) {
+      if (!isSupportedItemActivity(event.payload.itemType, event.payload)) {
         return [];
       }
       // A streaming update's `data` carries the full tool output accumulated
@@ -834,7 +857,7 @@ export function runtimeEventToActivities(
     }
 
     case "item.completed": {
-      if (!isActivityItemType(event.payload.itemType)) {
+      if (!isSupportedItemActivity(event.payload.itemType, event.payload)) {
         return [];
       }
       return [
@@ -862,7 +885,7 @@ export function runtimeEventToActivities(
     }
 
     case "item.started": {
-      if (!isActivityItemType(event.payload.itemType)) {
+      if (!isSupportedItemActivity(event.payload.itemType, event.payload)) {
         return [];
       }
       return [
