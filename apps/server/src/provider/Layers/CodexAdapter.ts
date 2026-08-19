@@ -819,8 +819,11 @@ function mapCollabAgentEvent(
  * CODEX_REASONING_UPDATE_CHUNK chars.
  */
 interface CodexReasoningStreamState {
-  /** itemId → partKey (`${kind}:${index}`) → accumulated text for that part. */
-  readonly partsByItemId: Map<string, Map<string, string>>;
+  /** itemId → indexed parts, summary and content apart (see compose note). */
+  readonly partsByItemId: Map<
+    string,
+    { readonly summary: Map<number, string>; readonly content: Map<number, string> }
+  >;
   /** itemId → composed text length at the last emitted item.updated (throttles live updates). */
   readonly lastEmittedLengthByItemId: Map<string, number>;
 }
@@ -839,16 +842,24 @@ function accumulateReasoningDeltaEvent(
     return undefined;
   }
   // Parts stream interleaved (summary sections, content blocks), each with
-  // its own index — track them separately and compose with the same "\n\n"
-  // boundaries reasoningItemText uses, or merged text reads as "firstsecond".
+  // its own index — track them separately and compose summary-then-content
+  // in index order, the same order reasoningItemText emits at completion,
+  // or the live text reshuffles when the block seals.
   let parts = state.partsByItemId.get(itemId);
   if (!parts) {
-    parts = new Map();
+    parts = { summary: new Map(), content: new Map() };
     state.partsByItemId.set(itemId, parts);
   }
-  const partKey = `${part.kind}:${part.index ?? 0}`;
-  parts.set(partKey, (parts.get(partKey) ?? "") + delta);
-  const text = Array.from(parts.values()).join("\n\n");
+  const bucket = part.kind === "summary" ? parts.summary : parts.content;
+  const index = part.index ?? 0;
+  bucket.set(index, (bucket.get(index) ?? "") + delta);
+  const byIndex = (a: [number, string], b: [number, string]) => a[0] - b[0];
+  const text = [
+    ...Array.from(parts.summary.entries()).sort(byIndex),
+    ...Array.from(parts.content.entries()).sort(byIndex),
+  ]
+    .map(([, value]) => value)
+    .join("\n\n");
   const lastEmittedLength = state.lastEmittedLengthByItemId.get(itemId) ?? 0;
   if (lastEmittedLength > 0 && text.length - lastEmittedLength < CODEX_REASONING_UPDATE_CHUNK) {
     return undefined;

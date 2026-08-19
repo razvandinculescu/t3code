@@ -798,6 +798,62 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("composes live reasoning in completion order: summary parts, then content parts", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const updatesFiber = yield* Stream.take(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "item.updated"),
+        2,
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      const emitDelta = (
+        id: string,
+        method: "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta",
+        delta: string,
+        index: number,
+      ) =>
+        runtime.emit({
+          id: asEventId(id),
+          kind: "notification",
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method,
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          itemId: asItemId("rs_1"),
+          payload:
+            method === "item/reasoning/summaryTextDelta"
+              ? {
+                  threadId: "thread-1",
+                  turnId: "turn-1",
+                  itemId: "rs_1",
+                  summaryIndex: index,
+                  delta,
+                }
+              : {
+                  threadId: "thread-1",
+                  turnId: "turn-1",
+                  itemId: "rs_1",
+                  contentIndex: index,
+                  delta,
+                },
+        } satisfies ProviderEvent);
+
+      // A content part arriving FIRST must not jump ahead of the summary in
+      // the live row — completion orders summary parts before content parts.
+      yield* emitDelta("evt-content-first", "item/reasoning/textDelta", "chain of thought", 0);
+      yield* emitDelta("evt-summary-second", "item/reasoning/summaryTextDelta", "x".repeat(600), 0);
+
+      const updates = Array.from(yield* Fiber.join(updatesFiber));
+      NodeAssert.equal(updates.length, 2);
+      const second = updates[1];
+      if (second?.type !== "item.updated") {
+        return;
+      }
+      NodeAssert.equal(second.payload.detail, `${"x".repeat(600)}\n\nchain of thought`);
+    }),
+  );
+
   it.effect("labels MCP lifecycle entries with server and tool names", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
