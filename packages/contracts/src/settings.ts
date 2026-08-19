@@ -221,6 +221,10 @@ export const ClientSettingsSchema = Schema.Struct({
   reasoningExpandedByDefault: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  // Work-log groups collapse to one visible row behind a "+N previous …"
+  // toggle by default. This keeps every tool/command row visible instead, for
+  // users who would rather scroll than click open each group.
+  workLogExpandedByDefault: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   // Legacy sidebar (the original per-project tree). Deliberately a fresh key
   // (was `sidebarV2Enabled` + `sidebarV2ConfiguredByUser`): decoding drops the
   // old keys, so everyone, including prior beta opt-outs, resets to the new
@@ -910,6 +914,7 @@ export const ClientSettingsPatch = Schema.Struct({
   ),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
   reasoningExpandedByDefault: Schema.optionalKey(Schema.Boolean),
+  workLogExpandedByDefault: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),

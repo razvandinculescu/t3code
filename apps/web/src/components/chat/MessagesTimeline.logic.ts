@@ -467,6 +467,7 @@ export function deriveMessagesTimelineRows(input: {
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
   reasoningExpandedByDefault?: boolean;
+  workLogExpandedByDefault?: boolean;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
   const durationStartByMessageId = computeMessageDurationStart(
@@ -544,7 +545,12 @@ export function deriveMessagesTimelineRows(input: {
           });
         } else {
           const groupId = `work-group:${timelineEntry.id}`;
-          const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
+          // The "expand work log by default" setting renders every row and
+          // drops the "+N previous …" toggle entirely (the setting itself is
+          // the way back out; per-group toggles would fight it).
+          const expanded =
+            input.workLogExpandedByDefault === true ||
+            (input.expandedWorkGroupIds?.has(groupId) ?? false);
           // Agent-spawn CTA rows are always visible: a running fleet must
           // never hide behind a "+N tool calls" toggle. Selection is by
           // membership (spawn OR recent-tail), preserving the group's
@@ -577,7 +583,7 @@ export function deriveMessagesTimelineRows(input: {
             });
           }
 
-          if (hiddenEntries.length > 0) {
+          if (hiddenEntries.length > 0 && input.workLogExpandedByDefault !== true) {
             nextRows.push({
               kind: "work-toggle",
               id: `work-toggle:${timelineEntry.id}`,

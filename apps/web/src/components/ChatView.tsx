@@ -4140,6 +4140,9 @@ function ChatViewContent(props: ChatViewProps) {
   const reasoningExpandedByDefault = useClientSettings(
     (settings) => settings.reasoningExpandedByDefault,
   );
+  const workLogExpandedByDefault = useClientSettings(
+    (settings) => settings.workLogExpandedByDefault,
+  );
   const activeThreadPr = resolveDisplayedThreadPr({
     threadBranch: activeThread?.branch ?? null,
     gitStatus: gitStatusQuery.data ?? null,
@@ -6361,6 +6364,7 @@ function ChatViewContent(props: ChatViewProps) {
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                 topFadeEnabled={!hasTimelineTopBanner}
                 reasoningExpandedByDefault={reasoningExpandedByDefault}
+                workLogExpandedByDefault={workLogExpandedByDefault}
                 loadEarlier={loadEarlierTurns}
               />
 

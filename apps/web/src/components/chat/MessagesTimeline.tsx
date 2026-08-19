@@ -245,6 +245,8 @@ interface MessagesTimelineProps {
   topFadeEnabled?: boolean;
   /** Keep reasoning (thinking) rows out of the turn fold (client setting). */
   reasoningExpandedByDefault?: boolean;
+  /** Keep every work-log row visible instead of "+N previous …" group toggles (client setting). */
+  workLogExpandedByDefault?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
 }
@@ -286,6 +288,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
   reasoningExpandedByDefault = false,
+  workLogExpandedByDefault = false,
   loadEarlier = null,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
@@ -413,6 +416,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
         reasoningExpandedByDefault,
+        workLogExpandedByDefault,
       }),
     [
       timelineEntries,
@@ -425,6 +429,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
       reasoningExpandedByDefault,
+      workLogExpandedByDefault,
     ],
   );
   const rows = useStableRows(rawRows);

@@ -1100,6 +1100,59 @@ describe("deriveMessagesTimelineRows", () => {
     });
   });
 
+  it("renders every work row and no toggle when work log expansion is on by default", () => {
+    const timelineEntries = [
+      {
+        id: "work-entry-1",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:01Z",
+        entry: {
+          id: "work-1",
+          createdAt: "2026-01-01T00:00:01Z",
+          label: "read",
+          detail: "Reading package.json",
+          tone: "tool" as const,
+        },
+      },
+      {
+        id: "work-entry-2",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:02Z",
+        entry: {
+          id: "work-2",
+          createdAt: "2026-01-01T00:00:02Z",
+          label: "edit",
+          detail: "Editing MessagesTimeline.tsx",
+          tone: "tool" as const,
+        },
+      },
+      {
+        id: "work-entry-3",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:03Z",
+        entry: {
+          id: "work-3",
+          createdAt: "2026-01-01T00:00:03Z",
+          label: "test",
+          detail: "Running tests",
+          tone: "tool" as const,
+        },
+      },
+    ];
+
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries,
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+      workLogExpandedByDefault: true,
+    });
+
+    expect(rows.map((row) => row.id)).toEqual(["work-1", "work-2", "work-3"]);
+    expect(rows.some((row) => row.kind === "work-toggle")).toBe(false);
+  });
+
   it("does not count reasoning rows as tool calls in the overflow toggle", () => {
     const timelineEntries = [
       {

@@ -502,6 +502,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.reasoningExpandedByDefault
         ? ["Thinking blocks expanded"]
         : []),
+      ...(settings.workLogExpandedByDefault !== DEFAULT_UNIFIED_SETTINGS.workLogExpandedByDefault
+        ? ["Work log groups expanded"]
+        : []),
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
         ? ["Diff whitespace changes"]
@@ -574,6 +577,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.timestampFormat,
       settings.wordWrap,
       settings.reasoningExpandedByDefault,
+      settings.workLogExpandedByDefault,
       followSystem,
       theme,
       themeHalves,
@@ -646,6 +650,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       reasoningExpandedByDefault: DEFAULT_UNIFIED_SETTINGS.reasoningExpandedByDefault,
+      workLogExpandedByDefault: DEFAULT_UNIFIED_SETTINGS.workLogExpandedByDefault,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
@@ -2017,6 +2022,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ reasoningExpandedByDefault: Boolean(checked) })
               }
               aria-label="Implicitly expanded thinking blocks"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("work-log-expanded")}
+          description="Keep every tool and command row in a turn visible instead of collapsing the group behind a “+N previous …” toggle."
+          resetAction={
+            settings.workLogExpandedByDefault !==
+            DEFAULT_UNIFIED_SETTINGS.workLogExpandedByDefault ? (
+              <SettingResetButton
+                label="work log expansion"
+                onClick={() =>
+                  updateSettings({
+                    workLogExpandedByDefault: DEFAULT_UNIFIED_SETTINGS.workLogExpandedByDefault,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.workLogExpandedByDefault}
+              onCheckedChange={(checked) =>
+                updateSettings({ workLogExpandedByDefault: Boolean(checked) })
+              }
+              aria-label="Implicitly expanded work log groups"
             />
           }
         />
