@@ -2268,13 +2268,19 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const reasoningExpandedByDefault = useClientSettings(
     (settings) => settings.reasoningExpandedByDefault,
   );
-  const reasoningAutoExpanded = workEntry.itemType === "reasoning" && reasoningExpandedByDefault;
-  const [expanded, setExpanded] = useState(reasoningAutoExpanded);
+  const workLogExpandedByDefault = useClientSettings(
+    (settings) => settings.workLogExpandedByDefault,
+  );
+  // "Expand work log" covers every row with a body (tool calls, file edits,
+  // output); reasoning keeps its own toggle on top of it.
+  const autoExpanded =
+    workLogExpandedByDefault || (workEntry.itemType === "reasoning" && reasoningExpandedByDefault);
+  const [expanded, setExpanded] = useState(autoExpanded);
   // The setting hydrates asynchronously and can change while rows are mounted;
   // keep the row's expanded state in sync with it.
   useEffect(() => {
-    setExpanded(reasoningAutoExpanded);
-  }, [reasoningAutoExpanded]);
+    setExpanded(autoExpanded);
+  }, [autoExpanded]);
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);

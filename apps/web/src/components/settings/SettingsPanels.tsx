@@ -2028,7 +2028,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("work-log-expanded")}
-          description="Keep every tool and command row in a turn visible instead of collapsing the group behind a “+N previous …” toggle."
+          description="Show the full body of every tool, command, and file-change row, and keep whole work-log groups visible instead of folding them behind a “+N previous …” toggle."
           resetAction={
             settings.workLogExpandedByDefault !==
             DEFAULT_UNIFIED_SETTINGS.workLogExpandedByDefault ? (
@@ -2048,7 +2048,7 @@ export function GeneralSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ workLogExpandedByDefault: Boolean(checked) })
               }
-              aria-label="Implicitly expanded work log groups"
+              aria-label="Implicitly expand the whole work log"
             />
           }
         />

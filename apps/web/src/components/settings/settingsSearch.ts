@@ -112,7 +112,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "work-log-expanded",
-    title: "Implicitly expanded work log groups",
+    title: "Implicitly expand the whole work log",
     to: "/settings/general",
   },
   {
