@@ -556,6 +556,170 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect(
+    "surfaces completed reasoning items with their summary text and a collapsible identity",
+    () =>
+      Effect.gen(function* () {
+        const { adapter, runtime } = yield* startLifecycleRuntime();
+        const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+        yield* runtime.emit({
+          id: asEventId("evt-reasoning-complete"),
+          kind: "notification",
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method: "item/completed",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          itemId: asItemId("rs_1"),
+          payload: {
+            completedAtMs: 1_778_000_000_000,
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              type: "reasoning",
+              id: "rs_1",
+              summary: ["**Clarifying precedence**", "Unary minus binds looser"],
+              content: [],
+            },
+          },
+        } satisfies ProviderEvent);
+
+        const firstEvent = yield* Fiber.join(firstEventFiber);
+        NodeAssert.equal(firstEvent._tag, "Some");
+        if (firstEvent._tag !== "Some") {
+          return;
+        }
+        NodeAssert.equal(firstEvent.value.type, "item.completed");
+        if (firstEvent.value.type !== "item.completed") {
+          return;
+        }
+        NodeAssert.equal(firstEvent.value.payload.itemType, "reasoning");
+        NodeAssert.equal(firstEvent.value.payload.title, "Reasoning");
+        NodeAssert.equal(
+          firstEvent.value.payload.detail,
+          "**Clarifying precedence**\n\nUnary minus binds looser",
+        );
+        NodeAssert.deepStrictEqual(
+          (firstEvent.value.payload.data as { readonly toolCallId?: unknown } | undefined)
+            ?.toolCallId,
+          "rs_1",
+        );
+      }),
+  );
+
+  it.effect("streams reasoning text deltas as throttled reasoning item updates", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const updatesFiber = yield* Stream.take(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "item.updated"),
+        2,
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      const emitDelta = (id: string, delta: string) =>
+        runtime.emit({
+          id: asEventId(id),
+          kind: "notification",
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method: "item/reasoning/summaryTextDelta",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          itemId: asItemId("rs_1"),
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "rs_1",
+            summaryIndex: 0,
+            delta,
+          },
+        } satisfies ProviderEvent);
+
+      yield* emitDelta("evt-delta-1", "Analizez ");
+      // Under the 512-char chunk threshold: accumulated, but no new update.
+      yield* emitDelta("evt-delta-2", "prioritatea operatorilor");
+      yield* emitDelta("evt-delta-3", "x".repeat(600));
+
+      const updates = Array.from(yield* Fiber.join(updatesFiber));
+      NodeAssert.equal(updates.length, 2);
+      const [first, second] = updates;
+      if (first?.type !== "item.updated" || second?.type !== "item.updated") {
+        return;
+      }
+      NodeAssert.equal(first.payload.itemType, "reasoning");
+      NodeAssert.equal(first.payload.title, "Reasoning");
+      NodeAssert.equal(first.payload.status, "inProgress");
+      NodeAssert.equal(first.payload.detail, "Analizez ");
+      NodeAssert.deepStrictEqual(
+        (first.payload.data as { readonly toolCallId?: unknown } | undefined)?.toolCallId,
+        "rs_1",
+      );
+      NodeAssert.equal(
+        second.payload.detail,
+        `Analizez prioritatea operatorilor${"x".repeat(600)}`,
+      );
+      NodeAssert.equal(second.itemId, first.itemId);
+    }),
+  );
+
+  it.effect("drops the reasoning accumulator when the reasoning item completes", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const updatesFiber = yield* Stream.take(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "item.updated"),
+        2,
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      const emitDelta = (id: string, delta: string) =>
+        runtime.emit({
+          id: asEventId(id),
+          kind: "notification",
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method: "item/reasoning/summaryTextDelta",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          itemId: asItemId("rs_1"),
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "rs_1",
+            summaryIndex: 0,
+            delta,
+          },
+        } satisfies ProviderEvent);
+
+      yield* emitDelta("evt-delta-complete-1", "part one");
+      yield* runtime.emit({
+        id: asEventId("evt-reasoning-complete-cleanup"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("rs_1"),
+        payload: {
+          completedAtMs: 1_778_000_000_001,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { type: "reasoning", id: "rs_1", summary: ["part one"], content: [] },
+        },
+      } satisfies ProviderEvent);
+      // A delta for the same itemId after completion starts a fresh
+      // accumulator instead of appending to the sealed item's text.
+      yield* emitDelta("evt-delta-complete-2", "fresh start");
+
+      const updates = Array.from(yield* Fiber.join(updatesFiber));
+      NodeAssert.equal(updates.length, 2);
+      const second = updates[1];
+      if (second?.type !== "item.updated") {
+        return;
+      }
+      NodeAssert.equal(second.payload.detail, "fresh start");
+    }),
+  );
+
   it.effect("labels MCP lifecycle entries with server and tool names", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
