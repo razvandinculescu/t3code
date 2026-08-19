@@ -977,6 +977,15 @@ function collapseDerivedWorkLogEntries(
   // own turn splintered one batch into a stream of "Kicked off N subagents"
   // rows (live-test finding, thread 7ac7ef05).
   const groupKeyByTaskId = new Map<string, string>();
+  // Rows carrying a toolCallId identity collapse by identity, not adjacency:
+  // Claude streams thinking deltas interleaved with tool_call input deltas,
+  // so adjacent-only folding split one reasoning block into a row per update
+  // whenever a tool call streamed in between (each row repainting the full
+  // accumulated text). The anchor keeps the FIRST row's id/createdAt/turnId,
+  // so the row grows in place with a stable React key instead of remounting
+  // on every delta. The fuzzy collapseKey fallback (no toolCallId) stays
+  // adjacency-only: two identical commands an hour apart are two rows.
+  const toolRowIndex = new Map<string, number>();
   for (const entry of entries) {
     const isTaskRow =
       entry.taskId !== undefined &&
@@ -1019,6 +1028,33 @@ function collapseDerivedWorkLogEntries(
         ...entry,
         agentSpawn: { workflowId, agentTaskIds: [entry.taskId] },
       });
+      continue;
+    }
+    const toolIdentityKey =
+      entry.toolCallId !== undefined &&
+      (entry.activityKind === "tool.updated" || entry.activityKind === "tool.completed")
+        ? entry.collapseKey
+        : undefined;
+    if (toolIdentityKey !== undefined) {
+      const existingIndex = toolRowIndex.get(toolIdentityKey);
+      const existing =
+        existingIndex !== undefined && existingIndex < collapsed.length
+          ? collapsed[existingIndex]
+          : undefined;
+      if (existingIndex !== undefined && existing && existing.activityKind !== "tool.completed") {
+        collapsed[existingIndex] = {
+          ...mergeDerivedWorkLogEntries(existing, entry),
+          id: existing.id,
+          createdAt: existing.createdAt,
+          turnId: existing.turnId ?? null,
+        };
+        continue;
+      }
+      // No live anchor (first sighting, or the anchor already completed): a
+      // completed row never absorbs later activity for the same identity, so
+      // a stale late update cannot regress the final detail.
+      toolRowIndex.set(toolIdentityKey, collapsed.length);
+      collapsed.push(entry);
       continue;
     }
     const previous = collapsed.at(-1);

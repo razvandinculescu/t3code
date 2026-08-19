@@ -597,6 +597,96 @@ describe("buildThreadFeed", () => {
     });
   });
 
+  it("collapses reasoning updates interleaved with streaming tool calls into one row", () => {
+    // Claude streams thinking deltas interleaved with tool_call input deltas;
+    // adjacent-only folding used to split one block into a row per update.
+    const turnId = TurnId.make("turn-reasoning-interleaved");
+    const thread = makeThread({
+      id: ThreadId.make("thread-reasoning-interleaved"),
+      projectId: ProjectId.make("project-1"),
+      title: "Thinking",
+      latestTurn: {
+        turnId,
+        state: "running",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+      activities: [
+        makeActivity({
+          id: EventId.make("reasoning-update-1"),
+          kind: "tool.updated",
+          tone: "tool",
+          summary: "Reasoning",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          turnId,
+          payload: {
+            itemType: "reasoning",
+            status: "inProgress",
+            detail: "Let",
+            data: { toolCallId: "reasoning-item-1" },
+          },
+        }),
+        makeActivity({
+          id: EventId.make("grep-update"),
+          kind: "tool.updated",
+          tone: "tool",
+          summary: "Grep",
+          createdAt: "2026-04-01T00:00:03.000Z",
+          turnId,
+          payload: {
+            itemType: "dynamic_tool_call",
+            status: "inProgress",
+            detail: 'Grep: {"pattern":"rea',
+            data: { toolCallId: "call-grep-1" },
+          },
+        }),
+        makeActivity({
+          id: EventId.make("reasoning-complete"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Reasoning",
+          createdAt: "2026-04-01T00:00:04.000Z",
+          turnId,
+          payload: {
+            itemType: "reasoning",
+            status: "completed",
+            detail: "Let me look at the code",
+            data: { toolCallId: "reasoning-item-1" },
+          },
+        }),
+        makeActivity({
+          id: EventId.make("grep-complete"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Grep",
+          createdAt: "2026-04-01T00:00:05.000Z",
+          turnId,
+          payload: {
+            itemType: "dynamic_tool_call",
+            status: "completed",
+            detail: 'Grep: {"pattern":"reasoning"}',
+            data: { toolCallId: "call-grep-1" },
+          },
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    const activities = feed.flatMap((entry) =>
+      entry.type === "activity-group" ? entry.activities : [],
+    );
+    const reasoning = activities.filter((activity) => activity.icon === "brain");
+    expect(reasoning).toHaveLength(1);
+    // The row anchors where thinking started and carries the final full text.
+    expect(reasoning[0]?.id).toBe(EventId.make("reasoning-update-1"));
+    expect(reasoning[0]?.getFullDetail()).toContain("Let me look at the code");
+    const grep = activities.filter((activity) => activity.summary.includes("Grep"));
+    expect(grep).toHaveLength(1);
+    expect(grep[0]?.id).toBe(EventId.make("grep-update"));
+  });
+
   it("hides reasoning rows that never accumulated thinking text", () => {
     const turnId = TurnId.make("turn-reasoning-empty");
     const thread = makeThread({

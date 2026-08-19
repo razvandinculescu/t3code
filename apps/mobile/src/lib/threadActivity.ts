@@ -455,6 +455,14 @@ function collapseDerivedWorkLogEntries(
   // Subagent rows collapse by identity, not adjacency (quiet-timeline
   // guarantee; mirrors web's session-logic).
   const taskRowIndex = new Map<string, number>();
+  // Rows carrying a toolCallId identity also collapse by identity (mirrors
+  // web): Claude streams thinking deltas interleaved with tool_call input
+  // deltas, and adjacent-only folding split one reasoning block into a row
+  // per update whenever a tool call streamed in between. The anchor keeps
+  // the FIRST row's id/createdAt/turnId so the row grows in place with a
+  // stable key. The fuzzy collapseKey fallback (no toolCallId) stays
+  // adjacency-only.
+  const toolRowIndex = new Map<string, number>();
   for (const entry of entries) {
     const isTaskRow =
       entry.taskId !== undefined &&
@@ -468,6 +476,32 @@ function collapseDerivedWorkLogEntries(
         continue;
       }
       taskRowIndex.set(entry.taskId, collapsed.length);
+      collapsed.push(entry);
+      continue;
+    }
+    const toolIdentityKey =
+      entry.toolCallId !== undefined &&
+      (entry.activityKind === "tool.updated" || entry.activityKind === "tool.completed")
+        ? entry.collapseKey
+        : undefined;
+    if (toolIdentityKey !== undefined) {
+      const existingIndex = toolRowIndex.get(toolIdentityKey);
+      const existing =
+        existingIndex !== undefined && existingIndex < collapsed.length
+          ? collapsed[existingIndex]
+          : undefined;
+      if (existingIndex !== undefined && existing && existing.activityKind !== "tool.completed") {
+        collapsed[existingIndex] = {
+          ...mergeDerivedWorkLogEntries(existing, entry),
+          id: existing.id,
+          createdAt: existing.createdAt,
+          turnId: existing.turnId ?? null,
+        };
+        continue;
+      }
+      // A completed anchor never absorbs later activity for the same
+      // identity, so a stale late update cannot regress the final detail.
+      toolRowIndex.set(toolIdentityKey, collapsed.length);
       collapsed.push(entry);
       continue;
     }

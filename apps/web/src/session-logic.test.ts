@@ -855,6 +855,165 @@ describe("deriveWorkLogEntries", () => {
     expect(entries[0]?.toolLifecycleStatus).toBe("completed");
   });
 
+  it("collapses reasoning updates interleaved with streaming tool calls into one anchored row", () => {
+    // Claude streams thinking deltas interleaved with tool_call input deltas;
+    // adjacent-only folding used to split one block into a row per update.
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "reasoning-updated-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Reasoning",
+        payload: {
+          itemType: "reasoning",
+          status: "inProgress",
+          detail: "Let",
+          data: { toolCallId: "reasoning-item-1" },
+        },
+      }),
+      makeActivity({
+        id: "grep-updated",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.updated",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          status: "inProgress",
+          detail: 'Grep: {"pattern":"rea',
+          data: { toolCallId: "call-grep-1" },
+        },
+      }),
+      makeActivity({
+        id: "reasoning-completed",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Reasoning",
+        payload: {
+          itemType: "reasoning",
+          status: "completed",
+          detail: "Let me look at the code",
+          data: { toolCallId: "reasoning-item-1" },
+        },
+      }),
+      makeActivity({
+        id: "grep-completed",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "tool.completed",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          status: "completed",
+          detail: 'Grep: {"pattern":"reasoning"}',
+          data: { toolCallId: "call-grep-1" },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities);
+    expect(entries.map((entry) => entry.itemType)).toEqual(["reasoning", "dynamic_tool_call"]);
+    // The reasoning row anchors where thinking started and keeps the FIRST
+    // activity's id, so it grows in place under a stable React key.
+    expect(entries[0]?.id).toBe(EventId.make("reasoning-updated-1"));
+    expect(entries[0]?.detail).toBe("Let me look at the code");
+    expect(entries[0]?.toolLifecycleStatus).toBe("completed");
+    expect(entries[1]?.id).toBe(EventId.make("grep-updated"));
+    expect(entries[1]?.detail).toBe('Grep: {"pattern":"reasoning"}');
+  });
+
+  it("keeps two interleaved reasoning blocks as separate anchored rows", () => {
+    const reasoningActivity = (
+      id: string,
+      createdAt: string,
+      kind: "tool.updated" | "tool.completed",
+      detail: string,
+      toolCallId: string,
+    ) =>
+      makeActivity({
+        id,
+        createdAt,
+        kind,
+        summary: "Reasoning",
+        payload: {
+          itemType: "reasoning",
+          status: kind === "tool.completed" ? "completed" : "inProgress",
+          detail,
+          data: { toolCallId },
+        },
+      });
+    const activities: OrchestrationThreadActivity[] = [
+      reasoningActivity(
+        "block-a-start",
+        "2026-02-23T00:00:01.000Z",
+        "tool.updated",
+        "First",
+        "reasoning-a",
+      ),
+      reasoningActivity(
+        "block-b-start",
+        "2026-02-23T00:00:02.000Z",
+        "tool.updated",
+        "Second",
+        "reasoning-b",
+      ),
+      reasoningActivity(
+        "block-a-end",
+        "2026-02-23T00:00:03.000Z",
+        "tool.completed",
+        "First block done",
+        "reasoning-a",
+      ),
+      reasoningActivity(
+        "block-b-end",
+        "2026-02-23T00:00:04.000Z",
+        "tool.completed",
+        "Second block done",
+        "reasoning-b",
+      ),
+    ];
+
+    const entries = deriveWorkLogEntries(activities);
+    expect(entries.map((entry) => entry.detail)).toEqual(["First block done", "Second block done"]);
+    expect(entries.map((entry) => entry.id)).toEqual([
+      EventId.make("block-a-start"),
+      EventId.make("block-b-start"),
+    ]);
+  });
+
+  it("does not let a late update regress a completed row for the same identity", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "reasoning-completed",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.completed",
+        summary: "Reasoning",
+        payload: {
+          itemType: "reasoning",
+          status: "completed",
+          detail: "Full final thinking text",
+          data: { toolCallId: "reasoning-item-1" },
+        },
+      }),
+      makeActivity({
+        id: "reasoning-late-update",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.updated",
+        summary: "Reasoning",
+        payload: {
+          itemType: "reasoning",
+          status: "inProgress",
+          detail: "Full",
+          data: { toolCallId: "reasoning-item-1" },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities);
+    expect(entries.length).toBe(2);
+    expect(entries[0]?.detail).toBe("Full final thinking text");
+    expect(entries[0]?.toolLifecycleStatus).toBe("completed");
+    expect(entries[1]?.id).toBe(EventId.make("reasoning-late-update"));
+  });
+
   it("omits task.started but shows task.progress and task.completed", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1351,7 +1510,9 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
-      id: "grep-complete",
+      // Collapsed rows keep the anchor (first update) id, so streaming rows
+      // grow in place under a stable React key.
+      id: "grep-update",
       toolTitle: "grep",
       detail: "19 files",
       itemType: "web_search",
@@ -1400,7 +1561,9 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
-      id: "read-complete",
+      // Collapsed rows keep the anchor (first update) id, so streaming rows
+      // grow in place under a stable React key.
+      id: "read-update",
       toolTitle: "Read File",
       detail: 'import * as Effect from "effect/Effect"',
       itemType: "dynamic_tool_call",
