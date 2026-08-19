@@ -287,7 +287,11 @@ function reasoningItemText(item: Record<string, unknown>): string | undefined {
   }
   if (Array.isArray(content)) {
     for (const block of content) {
-      if (block && typeof block === "object") {
+      // `content` is typed string[] on the wire; the object-with-text shape
+      // shows up in older app-server builds, so accept both.
+      if (typeof block === "string") {
+        parts.push(block);
+      } else if (block && typeof block === "object") {
         const text = (block as { readonly text?: unknown }).text;
         if (typeof text === "string") {
           parts.push(text);
@@ -815,7 +819,9 @@ function mapCollabAgentEvent(
  * CODEX_REASONING_UPDATE_CHUNK chars.
  */
 interface CodexReasoningStreamState {
-  readonly textByItemId: Map<string, string>;
+  /** itemId → partKey (`${kind}:${index}`) → accumulated text for that part. */
+  readonly partsByItemId: Map<string, Map<string, string>>;
+  /** itemId → composed text length at the last emitted item.updated (throttles live updates). */
   readonly lastEmittedLengthByItemId: Map<string, number>;
 }
 
@@ -826,13 +832,23 @@ function accumulateReasoningDeltaEvent(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
   delta: string,
+  part: { readonly kind: "summary" | "content"; readonly index: number | undefined },
 ): ProviderRuntimeEvent | undefined {
   const itemId = event.itemId;
   if (itemId === undefined) {
     return undefined;
   }
-  const text = (state.textByItemId.get(itemId) ?? "") + delta;
-  state.textByItemId.set(itemId, text);
+  // Parts stream interleaved (summary sections, content blocks), each with
+  // its own index — track them separately and compose with the same "\n\n"
+  // boundaries reasoningItemText uses, or merged text reads as "firstsecond".
+  let parts = state.partsByItemId.get(itemId);
+  if (!parts) {
+    parts = new Map();
+    state.partsByItemId.set(itemId, parts);
+  }
+  const partKey = `${part.kind}:${part.index ?? 0}`;
+  parts.set(partKey, (parts.get(partKey) ?? "") + delta);
+  const text = Array.from(parts.values()).join("\n\n");
   const lastEmittedLength = state.lastEmittedLengthByItemId.get(itemId) ?? 0;
   if (lastEmittedLength > 0 && text.length - lastEmittedLength < CODEX_REASONING_UPDATE_CHUNK) {
     return undefined;
@@ -1231,7 +1247,7 @@ function mapToRuntimeEvents(
       completed?.type === "item.completed" &&
       completed.payload.itemType === "reasoning"
     ) {
-      reasoningStreams.textByItemId.delete(event.itemId);
+      reasoningStreams.partsByItemId.delete(event.itemId);
       reasoningStreams.lastEmittedLengthByItemId.delete(event.itemId);
     }
     return completed ? [completed] : [];
@@ -1350,7 +1366,10 @@ function mapToRuntimeEvents(
       },
     };
     const reasoningUpdate = reasoningStreams
-      ? accumulateReasoningDeltaEvent(reasoningStreams, event, canonicalThreadId, delta)
+      ? accumulateReasoningDeltaEvent(reasoningStreams, event, canonicalThreadId, delta, {
+          kind: "summary",
+          index: payload?.summaryIndex,
+        })
       : undefined;
     return reasoningUpdate ? [contentDelta, reasoningUpdate] : [contentDelta];
   }
@@ -1371,7 +1390,10 @@ function mapToRuntimeEvents(
       },
     };
     const reasoningUpdate = reasoningStreams
-      ? accumulateReasoningDeltaEvent(reasoningStreams, event, canonicalThreadId, delta)
+      ? accumulateReasoningDeltaEvent(reasoningStreams, event, canonicalThreadId, delta, {
+          kind: "content",
+          index: payload?.contentIndex,
+        })
       : undefined;
     return reasoningUpdate ? [contentDelta, reasoningUpdate] : [contentDelta];
   }
@@ -1828,7 +1850,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         // children when it completes, so the consumer died on return and every
         // runtime event the session emitted afterwards was dropped.
         const reasoningStreams: CodexReasoningStreamState = {
-          textByItemId: new Map(),
+          partsByItemId: new Map(),
           lastEmittedLengthByItemId: new Map(),
         };
         const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>

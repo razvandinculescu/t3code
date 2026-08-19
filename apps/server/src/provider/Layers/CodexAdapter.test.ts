@@ -720,6 +720,84 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("reads reasoning text from string-array content when summary is empty", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-reasoning-content-complete"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("rs_2"),
+        payload: {
+          completedAtMs: 1_778_000_000_000,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "reasoning",
+            id: "rs_2",
+            summary: [],
+            content: ["chain", "of thought"],
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      NodeAssert.equal(firstEvent.value.payload.detail, "chain\n\nof thought");
+    }),
+  );
+
+  it.effect("keeps interleaved reasoning summary parts separated by part index", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const updatesFiber = yield* Stream.take(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "item.updated"),
+        2,
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      const emitDelta = (id: string, summaryIndex: number, delta: string) =>
+        runtime.emit({
+          id: asEventId(id),
+          kind: "notification",
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method: "item/reasoning/summaryTextDelta",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          itemId: asItemId("rs_1"),
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "rs_1",
+            summaryIndex,
+            delta,
+          },
+        } satisfies ProviderEvent);
+
+      yield* emitDelta("evt-part-0", 0, "First part.");
+      // A second indexed part must compose with a paragraph boundary, not
+      // merge into the first part's tail.
+      yield* emitDelta("evt-part-1", 1, "x".repeat(600));
+
+      const updates = Array.from(yield* Fiber.join(updatesFiber));
+      NodeAssert.equal(updates.length, 2);
+      const second = updates[1];
+      if (second?.type !== "item.updated") {
+        return;
+      }
+      NodeAssert.equal(second.payload.detail, `First part.\n\n${"x".repeat(600)}`);
+    }),
+  );
+
   it.effect("labels MCP lifecycle entries with server and tool names", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
