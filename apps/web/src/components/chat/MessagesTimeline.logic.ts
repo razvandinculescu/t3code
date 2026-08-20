@@ -773,6 +773,15 @@ export function deriveMessagesTimelineRows(input: {
     activeWorkAnchor && latestActiveToolEntry
       ? (() => {
           const groupId = workGroupId(activeWorkAnchor.id, activeWorkAnchor.entry);
+          // The live group honors the same expand-by-default settings as the
+          // settled group paths — otherwise streaming thinking stays folded
+          // behind a one-line row even when the user asked for expanded
+          // reasoning, and the only way in was a manual click every turn.
+          const expanded =
+            input.workLogExpandedByDefault === true ||
+            (input.reasoningExpandedByDefault === true &&
+              visibleActiveToolEntries.some((entry) => entry.entry.itemType === "reasoning")) ||
+            (input.expandedWorkGroupIds?.has(groupId) ?? false);
           return {
             kind: "work-live" as const,
             id: `work-live:${workGroupIdentity(activeWorkAnchor.id, activeWorkAnchor.entry)}`,
@@ -780,7 +789,7 @@ export function deriveMessagesTimelineRows(input: {
             entry: latestActiveToolEntry.entry,
             groupedEntries: visibleActiveToolEntries.map((entry) => entry.entry),
             groupId,
-            expanded: input.expandedWorkGroupIds?.has(groupId) ?? false,
+            expanded,
           };
         })()
       : null;

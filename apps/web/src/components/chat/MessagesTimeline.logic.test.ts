@@ -954,6 +954,61 @@ describe("deriveMessagesTimelineRows", () => {
     });
   });
 
+  it("expands the live work group by default when the expand settings ask for it", () => {
+    const timelineEntries = [
+      {
+        id: "reasoning-entry",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:01Z",
+        entry: {
+          id: "live-reasoning",
+          createdAt: "2026-01-01T00:00:01Z",
+          turnId: "turn-1" as never,
+          label: "Reasoning",
+          detail: "streaming thinking text",
+          tone: "thinking" as const,
+          itemType: "reasoning" as const,
+          toolLifecycleStatus: "inProgress" as const,
+        },
+      },
+    ];
+    const baseInput = {
+      latestTurn: {
+        turnId: "turn-1" as never,
+        state: "running",
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: null,
+      },
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    };
+
+    const collapsed = deriveMessagesTimelineRows({ timelineEntries, ...baseInput });
+    expect(collapsed.find((row) => row.kind === "work-live")).toMatchObject({
+      expanded: false,
+    });
+
+    const expandedByReasoning = deriveMessagesTimelineRows({
+      timelineEntries,
+      ...baseInput,
+      reasoningExpandedByDefault: true,
+    });
+    expect(expandedByReasoning.find((row) => row.kind === "work-live")).toMatchObject({
+      expanded: true,
+    });
+
+    const expandedByWorkLog = deriveMessagesTimelineRows({
+      timelineEntries,
+      ...baseInput,
+      workLogExpandedByDefault: true,
+    });
+    expect(expandedByWorkLog.find((row) => row.kind === "work-live")).toMatchObject({
+      expanded: true,
+    });
+  });
+
   it("summarizes a tool run after commentary starts a new run", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
