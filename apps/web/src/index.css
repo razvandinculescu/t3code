@@ -479,12 +479,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     transparent 100%
   );
   mask-repeat: no-repeat;
-  /* Local fork: the sweeping shine is a continuously repainting GPU animation
-     that replays on every row expand — off (upstream keeps it behind
-     prefers-reduced-motion only). */
-  animation: none;
-  opacity: 0;
-  will-change: auto;
+  animation: live-activity-focus 2.2s linear infinite;
+  will-change: transform;
 
   @media (prefers-reduced-motion: reduce) {
     animation: none;
@@ -495,8 +491,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @utility live-activity-focus-counter {
   width: 100%;
-  animation: none;
-  will-change: auto;
+  animation: live-activity-focus-counter 2.2s linear infinite;
+  will-change: transform;
 
   @media (prefers-reduced-motion: reduce) {
     animation: none;
