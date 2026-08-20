@@ -685,13 +685,17 @@ export function deriveMessagesTimelineRows(input: {
     input.latestTurn ?? null,
     input.runningTurnId ?? null,
   );
-  const foldsByAnchorEntryId = deriveTurnFolds({
-    timelineEntries: input.timelineEntries,
-    terminalAssistantMessageIds,
-    latestTurn: input.latestTurn ?? null,
-    unsettledTurnId,
-    reasoningExpandedByDefault: input.reasoningExpandedByDefault,
-  });
+  // "Expand work log" means see EVERYTHING: settled turns never fold behind
+  // "Worked for …" rows either.
+  const foldsByAnchorEntryId = input.workLogExpandedByDefault
+    ? new Map<string, TurnFold>()
+    : deriveTurnFolds({
+        timelineEntries: input.timelineEntries,
+        terminalAssistantMessageIds,
+        latestTurn: input.latestTurn ?? null,
+        unsettledTurnId,
+        reasoningExpandedByDefault: input.reasoningExpandedByDefault,
+      });
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorEntryId.values()) {
     if (!input.expandedTurnIds?.has(fold.turnId)) {
