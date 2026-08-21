@@ -975,7 +975,7 @@ describe("deriveMessagesTimelineRows", () => {
     const baseInput = {
       latestTurn: {
         turnId: "turn-1" as never,
-        state: "running",
+        state: "running" as const,
         startedAt: "2026-01-01T00:00:00Z",
         completedAt: null,
       },
