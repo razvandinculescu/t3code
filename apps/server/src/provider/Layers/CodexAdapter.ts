@@ -516,7 +516,9 @@ function mapItemLifecycle(
     lifecycle === "item.started"
       ? "inProgress"
       : lifecycle === "item.completed"
-        ? "completed"
+        ? "status" in item && (item.status === "failed" || item.status === "declined")
+          ? item.status
+          : "completed"
         : undefined;
   // Reasoning items get the renderable identity the ingestion guard and the
   // client collapse need: data.toolCallId ties started/updated/completed to

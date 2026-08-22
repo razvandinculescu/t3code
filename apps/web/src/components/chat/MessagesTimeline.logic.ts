@@ -932,9 +932,9 @@ export function deriveMessagesTimelineRows(input: {
               onlyToolEntries: true,
               summary: summarizeToolGroup(visibleGroupedEntries),
               summaryKind,
-              hasFailure: visibleGroupedEntries.some((entry) =>
-                workEntryDisplayIndicatesToolFailure(entry),
-              ),
+              // A failed attempt followed by a successful retry is recovered;
+              // the final tool outcome is the group status shown to the user.
+              hasFailure: workEntryDisplayIndicatesToolFailure(visibleGroupedEntries.at(-1)!),
             });
           }
           if (expanded) {
