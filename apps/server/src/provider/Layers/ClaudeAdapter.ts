@@ -203,6 +203,19 @@ function reasoningBlockKey(messageId: string | undefined, blockIndex: number): s
   return `${messageId ?? ""}:${blockIndex}`;
 }
 
+/**
+ * Mythos-class models (Fable/Mythos) withhold raw thinking text outside
+ * interactive Claude Code: without an explicit display mode the CLI's
+ * non-interactive default omits it, so thinking deltas stream empty and
+ * reasoning rows render blank. Requesting API-side summaries restores
+ * visible thinking; a user-supplied `--thinking-display` in launchArgs
+ * always wins.
+ */
+function claudeModelNeedsSummarizedThinkingDisplay(model: string | null | undefined): boolean {
+  const slug = model?.trim() ?? "";
+  return slug.startsWith("claude-fable-") || slug.startsWith("claude-mythos-");
+}
+
 interface PendingApproval {
   readonly requestType: CanonicalRequestType;
   readonly detail?: string;
@@ -4452,6 +4465,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         : undefined;
       const ultracode = isClaudeUltracodeEffort(effort);
       const effectiveEffort = getEffectiveClaudeAgentEffort(effort, modelSelection?.model);
+      if (
+        extraArgs["thinking-display"] === undefined &&
+        claudeModelNeedsSummarizedThinkingDisplay(modelSelection?.model)
+      ) {
+        extraArgs["thinking-display"] = "summarized";
+      }
       const runtimeModeToPermission: Record<string, PermissionMode> = {
         "auto-accept-edits": "acceptEdits",
         auto: "auto",
