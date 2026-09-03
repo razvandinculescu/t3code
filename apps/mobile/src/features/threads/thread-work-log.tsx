@@ -22,7 +22,6 @@ import {
   AppState,
   type ColorValue,
   Pressable,
-  ScrollView,
   StyleSheet,
   View,
 } from "react-native";
@@ -825,29 +824,11 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
               {props.renderImage({ href: viewedImagePath, alt: null, title: null })}
             </View>
           ) : null}
-          {row.icon === "brain" ? (
-            // Reasoning is streamed prose the user follows live: the block
-            // grows with the text instead of scrolling inside a fixed-height
-            // box (tool outputs keep the max-h-60 clamp).
-            <Text
-              selectable
-              className="pr-2 font-mono text-2xs leading-normal text-foreground-muted"
-            >
-              {fullDetail}
-            </Text>
-          ) : (
-            <ScrollView
-              nestedScrollEnabled
-              directionalLockEnabled
-              showsVerticalScrollIndicator
-              className="max-h-60"
-              contentContainerStyle={{ paddingRight: 8 }}
-            >
-              <Text selectable className="font-mono text-2xs leading-normal text-foreground-muted">
-                {fullDetail}
-              </Text>
-            </ScrollView>
-          )}
+          {/* Expanded bodies grow with their text instead of scrolling inside
+              a fixed-height box, for tool output as much as for reasoning. */}
+          <Text selectable className="pr-2 font-mono text-2xs leading-normal text-foreground-muted">
+            {fullDetail}
+          </Text>
         </Animated.View>
       ) : null}
     </Animated.View>

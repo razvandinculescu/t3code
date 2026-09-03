@@ -2798,14 +2798,10 @@ function buildToolCallExpandedBody(
   return blocks.length > 0 ? blocks.join("\n\n") : null;
 }
 
-const toolCallExpandedBodyClassName =
-  "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[length:var(--font-size-code,0.6875rem)] leading-relaxed select-text";
-
-// Reasoning is streamed prose the user follows live: clamping it to max-h-64
-// forced scrolling a 16rem box while the thinking kept growing past it. The
-// block grows with the text instead (Claude Code behavior); tool outputs keep
-// the clamp.
-const reasoningExpandedBodyClassName =
+// Expanded bodies (reasoning, commands, tool output) grow with their text
+// instead of scrolling inside a fixed-height box: a max-h clamp forced a nested
+// scroll region the user had to drag through while the content kept growing.
+const workEntryExpandedBodyClassName =
   "cursor-text whitespace-pre-wrap break-words font-mono text-secondary-label text-[length:var(--font-size-code,0.6875rem)] leading-relaxed select-text";
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
@@ -3137,15 +3133,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
               />
             </div>
           ) : null}
-          <pre
-            className={
-              workEntry.itemType === "reasoning"
-                ? reasoningExpandedBodyClassName
-                : toolCallExpandedBodyClassName
-            }
-          >
-            {expandedBody}
-          </pre>
+          <pre className={workEntryExpandedBodyClassName}>{expandedBody}</pre>
         </div>
       ) : null}
     </div>
