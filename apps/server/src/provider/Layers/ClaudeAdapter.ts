@@ -162,6 +162,13 @@ interface ClaudeTurnState {
   latestAssistantUsage: unknown | undefined;
   compactedSinceLatestAssistantUsage: boolean;
   nextSyntheticAssistantBlockIndex: number;
+  /**
+   * Resolved once completeTurn has emitted turn.completed for this turn.
+   * interruptTurn awaits it so the SDK's own aborted result (not a local
+   * guess) closes the turn, and nothing is left on the stream to close the
+   * next one.
+   */
+  readonly completed: Deferred.Deferred<void>;
 }
 
 interface AssistantTextBlockState {
@@ -249,12 +256,10 @@ function toSessionPermissionUpdates(
   toolName: string,
   suggestions: ReadonlyArray<PermissionUpdate> | undefined,
 ): Array<PermissionUpdate> {
-  const sessionScoped = (suggestions ?? []).map(
-    (suggestion): PermissionUpdate => ({
-      ...suggestion,
-      destination: "session",
-    }),
-  );
+  const sessionScoped = (suggestions ?? []).map((suggestion): PermissionUpdate => ({
+    ...suggestion,
+    destination: "session",
+  }));
   if (sessionScoped.length > 0) {
     return sessionScoped;
   }
@@ -391,6 +396,9 @@ interface ClaudeSessionContext {
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
+  readonly interrupt: () => Promise<void>;
+  /** SDK Query.stopTask — present on real queries; optional for test doubles. */
+  readonly stopTask?: ((taskId: string) => Promise<void>) | undefined;
   readonly setModel: (model?: string) => Promise<void>;
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
@@ -2693,6 +2701,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ...(status === "failed" && errorMessage ? { lastError: errorMessage } : {}),
     };
     yield* updateResumeCursor(context);
+    yield* Deferred.succeed(turnState.completed, undefined);
   });
 
   const handleStreamEvent = Effect.fn("handleStreamEvent")(function* (
@@ -3298,6 +3307,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         reasoningBlocks: new Map(),
         emittedReasoningBlockKeys: new Set(),
         activeStreamMessageId: undefined,
+        completed: yield* Deferred.make<void>(),
         capturedProposedPlanKeys: new Set(),
         latestAssistantUsage: undefined,
         compactedSinceLatestAssistantUsage: false,
@@ -4055,6 +4065,82 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     });
   });
 
+  // A request nobody can answer any more must not stay open, or the thread
+  // can never be settled. Shared by the hard stop (session close) and the
+  // cooperative stop (turn interrupt).
+  const cancelPendingRequests = Effect.fn("cancelPendingRequests")(function* (
+    context: ClaudeSessionContext,
+  ) {
+    for (const [requestId, pending] of context.pendingApprovals) {
+      yield* Deferred.succeed(pending.decision, "cancel");
+      const stamp = yield* makeEventStamp();
+      yield* offerRuntimeEvent({
+        type: "request.resolved",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: context.session.threadId,
+        ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+        requestId: asRuntimeRequestId(requestId),
+        payload: {
+          requestType: pending.requestType,
+          decision: "cancel",
+        },
+        providerRefs: nativeProviderRefs(context),
+      });
+    }
+    context.pendingApprovals.clear();
+
+    for (const pending of [...context.pendingUserInputs.values()]) {
+      yield* pending.cancel;
+    }
+  });
+
+  // Best-effort SDK stopTask for every live subagent. An acknowledged stop is
+  // made authoritative for the durable UI state: stopTask only acknowledges
+  // the control request, and its task_notification can lose the race with
+  // interrupt(). Tasks left in liveTaskIds afterwards were not stopped.
+  const stopLiveTasks = Effect.fn("stopLiveTasks")(function* (context: ClaudeSessionContext) {
+    if (!context.query.stopTask || context.liveTaskIds.size === 0) {
+      return;
+    }
+    const liveIds = Array.from(context.liveTaskIds);
+    yield* Effect.forEach(
+      liveIds,
+      (taskId) =>
+        Effect.gen(function* () {
+          const stopAcknowledged = yield* Effect.tryPromise({
+            // Invoke through the query object: SDK methods rely on `this`.
+            try: () => context.query.stopTask!(taskId),
+            catch: () => undefined,
+          }).pipe(
+            Effect.timeoutOption("3 seconds"),
+            Effect.map((outcome) => outcome._tag === "Some"),
+            Effect.catch(() => Effect.succeed(false)),
+          );
+          if (!stopAcknowledged || !context.liveTaskIds.delete(taskId)) {
+            return;
+          }
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent({
+            type: "task.completed",
+            eventId: stamp.eventId,
+            provider: PROVIDER,
+            createdAt: stamp.createdAt,
+            threadId: context.session.threadId,
+            ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+            payload: {
+              taskId: RuntimeTaskId.make(taskId),
+              status: "stopped",
+              ...taskLinkageFor(context.taskAgents, taskId),
+            },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }).pipe(Effect.ignore),
+      { concurrency: 8, discard: true },
+    ).pipe(Effect.timeoutOption("10 seconds"), Effect.ignore);
+  });
+
   const stopSessionInternal = Effect.fn("stopSessionInternal")(function* (
     context: ClaudeSessionContext,
     options?: { readonly emitExitEvent?: boolean },
@@ -4097,31 +4183,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       });
     }
 
-    for (const [requestId, pending] of context.pendingApprovals) {
-      yield* Deferred.succeed(pending.decision, "cancel");
-      const stamp = yield* makeEventStamp();
-      yield* offerRuntimeEvent({
-        type: "request.resolved",
-        eventId: stamp.eventId,
-        provider: PROVIDER,
-        createdAt: stamp.createdAt,
-        threadId: context.session.threadId,
-        ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
-        requestId: asRuntimeRequestId(requestId),
-        payload: {
-          requestType: pending.requestType,
-          decision: "cancel",
-        },
-        providerRefs: nativeProviderRefs(context),
-      });
-    }
-    context.pendingApprovals.clear();
-
-    // Same reason as the approvals above: a request nobody can answer any more
-    // must not stay open, or the thread can never be settled.
-    for (const pending of [...context.pendingUserInputs.values()]) {
-      yield* pending.cancel;
-    }
+    yield* cancelPendingRequests(context);
 
     if (context.turnState) {
       yield* completeTurn(context, "interrupted", "Session stopped.");
@@ -4969,6 +5031,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         reasoningBlocks: new Map(),
         emittedReasoningBlockKeys: new Set(),
         activeStreamMessageId: undefined,
+        completed: yield* Deferred.make<void>(),
         capturedProposedPlanKeys: new Set(),
         latestAssistantUsage: undefined,
         compactedSinceLatestAssistantUsage: false,
@@ -5036,13 +5099,74 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     };
   });
 
+  // Cooperative Stop: cancel the in-flight turn but keep the CLI process.
+  // Closing the query forces the next prompt through --resume, and Claude
+  // Code keeps `git status` in the cached prompt prefix, so a changed tree
+  // re-bills the whole conversation as cache writes on every Stop
+  // (anthropics/claude-code#78720, pingdotgg/t3code#7338). The hard stop
+  // (close, SIGKILL escalation) remains the fallback when subagents cannot
+  // be stopped — the runaway-fleet case from #5891 — and stays the behavior
+  // of thread.session.stop and the idle reaper.
   const interruptTurn: ClaudeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
-    function* (threadId, _turnId) {
+    function* (threadId, turnId) {
       const context = yield* requireSession(threadId);
-      // interrupt() can acknowledge while resumed background tasks keep the
-      // CLI alive. Stop is a hard session boundary for Claude, so close the
-      // query and let the SDK escalate to SIGKILL when graceful exit fails.
-      yield* stopSessionInternal(context);
+      const targetTurn = context.turnState;
+      // A Stop aimed at a turn that already ended must not touch its successor.
+      if (turnId !== undefined && targetTurn !== undefined && targetTurn.turnId !== turnId) {
+        return;
+      }
+
+      yield* stopLiveTasks(context);
+      if (context.liveTaskIds.size > 0) {
+        yield* stopSessionInternal(context);
+        return;
+      }
+
+      // stopLiveTasks can wait on the provider; re-check the turn identity
+      // before interrupting so a delayed Stop cannot hit a newer turn.
+      if (targetTurn === undefined || context.turnState !== targetTurn) {
+        return;
+      }
+
+      // Unblock anything the CLI is waiting on (approval, question) before
+      // asking it to abort, and make sure nothing stays open on a finished turn.
+      yield* cancelPendingRequests(context);
+
+      // If the CLI cannot even take the interrupt, it is not worth keeping:
+      // fall back to the hard stop so Stop always ends in a consistent state.
+      const interrupted = yield* Effect.tryPromise({
+        try: () => context.query.interrupt(),
+        catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
+      }).pipe(
+        Effect.as(true),
+        Effect.catch(() => Effect.succeed(false)),
+      );
+      if (!interrupted) {
+        yield* stopSessionInternal(context);
+        return;
+      }
+
+      // A subagent that started while interrupt() was in flight would keep
+      // running; give it one stop pass, then fall back to the hard stop.
+      if (context.liveTaskIds.size > 0) {
+        yield* stopLiveTasks(context);
+        if (context.liveTaskIds.size > 0) {
+          yield* stopSessionInternal(context);
+          return;
+        }
+      }
+
+      // The CLI answers interrupt() with an aborted result on the stream
+      // (terminal_reason aborted_streaming/aborted_tools); let that close the
+      // turn so no late result is left to close the next one. Fall back to a
+      // local close only when the result never comes.
+      const closedBySdk = yield* Deferred.await(targetTurn.completed).pipe(
+        Effect.timeoutOption("5 seconds"),
+        Effect.map((outcome) => outcome._tag === "Some"),
+      );
+      if (!closedBySdk && context.turnState === targetTurn) {
+        yield* completeTurn(context, "interrupted");
+      }
     },
   );
 

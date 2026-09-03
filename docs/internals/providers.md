@@ -147,6 +147,12 @@ Clients never call a provider directly. They dispatch orchestration commands ove
 `thread.user-input.respond`, `thread.checkpoint.revert`, and `thread.session.stop`, plus the mode
 setters `thread.runtime-mode.set` and `thread.interaction-mode.set`.
 
+Claude Stop is `thread.turn.interrupt`, not `thread.session.stop`. The Claude adapter stops live
+subagent tasks, interrupts the in-flight turn, and keeps the CLI process so the next prompt is not a
+`--resume`. Closing on Esc was re-billing the prompt cache on every stop. If a subagent cannot be
+stopped, the adapter falls back to closing the session; `thread.session.stop` and the idle reaper
+still close the process.
+
 The engine persists an event for the command, and a server-side reactor performs the provider call.
 Provider output comes back as internal commands such as `thread.message.assistant.delta` and
 `thread.session.set`, which clients observe through `orchestration.subscribeThread`. See
