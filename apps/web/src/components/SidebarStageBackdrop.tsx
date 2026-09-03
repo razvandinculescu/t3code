@@ -19,7 +19,10 @@ export function resolveSidebarStageBackdropVariant(
   if (!enabled) return null;
   const normalized = stageLabel.trim().toLowerCase();
   if (normalized === "nightly") return "nightly";
-  if (normalized === "dev") return "dev";
+  // Stable packaged desktop builds identify themselves as Alpha. Keep the
+  // blueprint artwork there too so selecting artwork does not produce an
+  // empty header outside the development server.
+  if (normalized === "dev" || normalized === "alpha") return "dev";
   return null;
 }
 
