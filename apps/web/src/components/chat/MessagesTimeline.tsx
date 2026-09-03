@@ -1594,13 +1594,19 @@ const WorkGroupSection = memo(function WorkGroupSection({
   isExpandedToolGroup: boolean;
 }) {
   const { workspaceRoot, routeThreadKey } = use(TimelineRowCtx);
+  // "Expand work log" means the whole log reads top to bottom: expanded tool
+  // groups render as a plain list instead of the height-clamped virtualized
+  // scroller, so every row and body is on the page without nested scrolling.
+  const workLogExpandedByDefault = useClientSettings(
+    (settings) => settings.workLogExpandedByDefault,
+  );
   const nonEmptyEntries = useMemo(
     () => groupedEntries.filter((entry) => workEntryIsVisibleInGroup(entry, isExpandedToolGroup)),
     [groupedEntries, isExpandedToolGroup],
   );
 
   if (nonEmptyEntries.length === 0) return null;
-  if (isExpandedToolGroup) {
+  if (isExpandedToolGroup && !workLogExpandedByDefault) {
     return (
       <ExpandedWorkGroupEntries
         key={`${routeThreadKey}:${anchorKey}`}
@@ -1611,19 +1617,23 @@ const WorkGroupSection = memo(function WorkGroupSection({
     );
   }
 
+  const GroupContainer = isExpandedToolGroup ? "div" : "section";
   return (
-    <section className="-mx-1 space-y-0.5 px-1 py-0.5" aria-label="Activity">
+    <GroupContainer
+      className={cn("-mx-1 px-1", isExpandedToolGroup ? "py-0" : "space-y-0.5 py-0.5")}
+      aria-label={isExpandedToolGroup ? undefined : "Activity"}
+    >
       <div className="space-y-px">
         {nonEmptyEntries.map((workEntry) => (
           <SimpleWorkEntryRow
             key={workEntry.id}
             workEntry={workEntry}
             workspaceRoot={workspaceRoot}
-            isExpandedToolGroupEntry={false}
+            isExpandedToolGroupEntry={isExpandedToolGroup}
           />
         ))}
       </div>
-    </section>
+    </GroupContainer>
   );
 });
 
