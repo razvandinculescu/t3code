@@ -1090,3 +1090,128 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Row size hints for LegendList
+// ---------------------------------------------------------------------------
+
+/**
+ * Coarse size class of a timeline row, appended to LegendList's item type so
+ * its per-type size averages stay meaningful. With one "work" type, a 40 px
+ * "Read file" row and a 4000 px expanded tool output share an average; the
+ * unmeasured rows above the viewport then get an estimate that is off by an
+ * order of magnitude, and every correction as they scroll into view moves the
+ * viewport. Bucketing by expected text length keeps the estimate near the
+ * truth for both.
+ */
+export type TimelineRowSizeBucket = "s" | "m" | "l" | "xl";
+
+export interface TimelineRowSizeOptions {
+  /** Every work-log row renders its body (client setting). */
+  readonly workLogExpandedByDefault: boolean;
+  /** Reasoning rows render their thinking text (client setting). */
+  readonly reasoningExpandedByDefault: boolean;
+}
+
+const TIMELINE_ROW_SIZE_BUCKET_CHARS: ReadonlyArray<readonly [TimelineRowSizeBucket, number]> = [
+  ["s", 400],
+  ["m", 2_000],
+  ["l", 8_000],
+];
+
+// Attachments render as thumbnails or file chips; count each as a short line.
+const TIMELINE_ATTACHMENT_CHARS = 120;
+
+function workEntryRendersBody(entry: WorkLogEntry, options: TimelineRowSizeOptions): boolean {
+  return (
+    options.workLogExpandedByDefault ||
+    (entry.itemType === "reasoning" && options.reasoningExpandedByDefault)
+  );
+}
+
+function workEntryTextLength(entry: WorkLogEntry, options: TimelineRowSizeOptions): number {
+  let length = entry.label.length;
+  if (!workEntryRendersBody(entry, options)) {
+    return length;
+  }
+  length += entry.detail?.length ?? 0;
+  length += (entry.rawCommand ?? entry.command)?.length ?? 0;
+  for (const filePath of entry.changedFiles ?? []) {
+    length += filePath.length + 1;
+  }
+  return length;
+}
+
+/** Characters a row is expected to lay out, given the current disclosure settings. */
+export function estimateTimelineRowTextLength(
+  row: MessagesTimelineRow,
+  options: TimelineRowSizeOptions,
+): number {
+  switch (row.kind) {
+    case "message": {
+      const attachments = row.message.attachments?.length ?? 0;
+      return row.message.text.length + attachments * TIMELINE_ATTACHMENT_CHARS;
+    }
+    case "work": {
+      let length = 0;
+      for (const entry of row.groupedEntries) {
+        length += workEntryTextLength(entry, options);
+      }
+      return length;
+    }
+    case "work-live": {
+      // The live row shows one entry; its group is only rendered once expanded.
+      const liveOptions = row.expanded
+        ? { workLogExpandedByDefault: true, reasoningExpandedByDefault: true }
+        : options;
+      let length = workEntryTextLength(row.entry, liveOptions);
+      if (row.expanded) {
+        for (const entry of row.groupedEntries) {
+          length += workEntryTextLength(entry, options);
+        }
+      }
+      return length;
+    }
+    case "proposed-plan":
+      return row.proposedPlan.planMarkdown.length;
+    case "work-toggle":
+    case "turn-fold":
+    case "working":
+    case "thinking":
+      return 0;
+  }
+}
+
+export function resolveTimelineRowSizeBucket(textLength: number): TimelineRowSizeBucket {
+  for (const [bucket, maxChars] of TIMELINE_ROW_SIZE_BUCKET_CHARS) {
+    if (textLength <= maxChars) {
+      return bucket;
+    }
+  }
+  return "xl";
+}
+
+/**
+ * LegendList item type: the row kind (and message role), refined by size
+ * bucket for the kinds whose height varies with their text. Measured sizes
+ * are cached per row id, so a bucket change only affects rows not yet laid out.
+ */
+export function resolveTimelineRowItemType(
+  row: MessagesTimelineRow,
+  options: TimelineRowSizeOptions,
+): string {
+  switch (row.kind) {
+    case "message":
+      return `message:${row.message.role}:${resolveTimelineRowSizeBucket(
+        estimateTimelineRowTextLength(row, options),
+      )}`;
+    case "work":
+    case "work-live":
+    case "proposed-plan":
+      return `${row.kind}:${resolveTimelineRowSizeBucket(
+        estimateTimelineRowTextLength(row, options),
+      )}`;
+    default:
+      return row.kind;
+  }
+}

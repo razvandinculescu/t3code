@@ -7,6 +7,8 @@ import {
   liveWorkEntryLabel,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveTimelineRowItemType,
+  resolveTimelineRowSizeBucket,
   resolveWorkGroupScrollIndex,
   shouldFollowWorkGroupAppend,
   shouldPreserveAssistantLineBreaks,
@@ -2374,5 +2376,84 @@ describe("computeStableMessagesTimelineRows", () => {
 
     expect(reordered).not.toBe(initial);
     expect(reordered.result).toEqual([initial.result[1], initial.result[0]]);
+  });
+});
+
+describe("timeline row size buckets", () => {
+  const collapsed = { workLogExpandedByDefault: false, reasoningExpandedByDefault: false };
+  const expanded = { workLogExpandedByDefault: true, reasoningExpandedByDefault: true };
+  const entry = (overrides: Partial<{ label: string; detail: string; itemType: "reasoning" }>) => ({
+    id: "entry",
+    createdAt: "2026-09-03T10:00:00.000Z",
+    label: "Read file",
+    tone: "tool" as const,
+    ...overrides,
+  });
+  const workRow = (entries: ReturnType<typeof entry>[]): MessagesTimelineRow => ({
+    kind: "work",
+    id: "work",
+    createdAt: "2026-09-03T10:00:00.000Z",
+    groupedEntries: entries,
+    isExpandedToolGroup: false,
+  });
+
+  it("maps text length to a coarse bucket", () => {
+    expect(resolveTimelineRowSizeBucket(0)).toBe("s");
+    expect(resolveTimelineRowSizeBucket(400)).toBe("s");
+    expect(resolveTimelineRowSizeBucket(401)).toBe("m");
+    expect(resolveTimelineRowSizeBucket(2_000)).toBe("m");
+    expect(resolveTimelineRowSizeBucket(2_001)).toBe("l");
+    expect(resolveTimelineRowSizeBucket(8_001)).toBe("xl");
+  });
+
+  it("counts work-log bodies only when the settings render them", () => {
+    const row = workRow([entry({ detail: "x".repeat(5_000) })]);
+    expect(resolveTimelineRowItemType(row, collapsed)).toBe("work:s");
+    expect(resolveTimelineRowItemType(row, expanded)).toBe("work:l");
+  });
+
+  it("counts reasoning text under the reasoning setting alone", () => {
+    const row = workRow([entry({ itemType: "reasoning", detail: "t".repeat(3_000) })]);
+    expect(resolveTimelineRowItemType(row, collapsed)).toBe("work:s");
+    expect(
+      resolveTimelineRowItemType(row, {
+        workLogExpandedByDefault: false,
+        reasoningExpandedByDefault: true,
+      }),
+    ).toBe("work:l");
+  });
+
+  it("sizes messages by their text and keeps the role in the type", () => {
+    const row: MessagesTimelineRow = {
+      kind: "message",
+      id: "message",
+      createdAt: "2026-09-03T10:00:00.000Z",
+      message: {
+        id: MessageId.make("message"),
+        role: "assistant",
+        text: "a".repeat(9_000),
+        turnId: null,
+        streaming: false,
+        createdAt: "2026-09-03T10:00:00.000Z",
+        updatedAt: "2026-09-03T10:00:00.000Z",
+      },
+      durationStart: "2026-09-03T10:00:00.000Z",
+      showAssistantMeta: false,
+      showAssistantCopyButton: false,
+      assistantCopyStreaming: false,
+    };
+    expect(resolveTimelineRowItemType(row, collapsed)).toBe("message:assistant:xl");
+  });
+
+  it("leaves fixed-height rows on their plain kind", () => {
+    const row: MessagesTimelineRow = {
+      kind: "turn-fold",
+      id: "fold",
+      createdAt: "2026-09-03T10:00:00.000Z",
+      turnId: TurnId.make("turn"),
+      label: "Worked for 3s",
+      expanded: false,
+    };
+    expect(resolveTimelineRowItemType(row, expanded)).toBe("turn-fold");
   });
 });

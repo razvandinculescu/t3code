@@ -4347,6 +4347,7 @@ function ChatViewContent(props: ChatViewProps) {
   const activeTimelineAnchorIndexRef = useRef<number | null>(null);
   const anchorUserScrollGenerationRef = useRef(0);
   const liveFollowUserScrollGenerationRef = useRef<number | null>(0);
+  const followRepinFrameRef = useRef<number | null>(null);
   // Manual navigation stops live-follow without removing anchored end space.
   // Collapsing that space during a gesture clamps the viewport back to the end.
   const cancelTimelineLiveFollowForUserNavigation = useCallback(() => {
@@ -4650,6 +4651,27 @@ function ChatViewContent(props: ChatViewProps) {
     ) {
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(false);
+      // The viewport left the end without a gesture: LegendList's own end
+      // follow landed short (row sizes settling after mount, a snapshot
+      // replacing rows, a resize) and from then on it treats its own drift as
+      // a user scroll and stops following. Re-pin once per frame. The
+      // new-turn anchor mode frames the sent message away from the end on
+      // purpose and keeps its own positioning.
+      if (
+        timelineScrollModeRef.current === "following-end" &&
+        followRepinFrameRef.current === null
+      ) {
+        followRepinFrameRef.current = requestAnimationFrame(() => {
+          followRepinFrameRef.current = null;
+          if (
+            liveFollowUserScrollGenerationRef.current !== anchorUserScrollGenerationRef.current ||
+            timelineScrollModeRef.current !== "following-end"
+          ) {
+            return;
+          }
+          void legendListRef.current?.scrollToEnd?.({ animated: false });
+        });
+      }
       return;
     }
     if (isAtEndRef.current === isAtEnd) return;
@@ -4726,6 +4748,10 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     setPullRequestDialogState(null);
+    if (followRepinFrameRef.current !== null) {
+      cancelAnimationFrame(followRepinFrameRef.current);
+      followRepinFrameRef.current = null;
+    }
     isAtEndRef.current = true;
     timelineScrollModeRef.current = "following-end";
     liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;

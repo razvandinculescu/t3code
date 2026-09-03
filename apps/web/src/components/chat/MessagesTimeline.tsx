@@ -92,7 +92,7 @@ import {
   ZapIcon,
 } from "lucide-react";
 import { Button } from "../ui/button";
-import { useClientSettings } from "../../hooks/useSettings";
+import { useClientSettings, useClientSettingsHydrated } from "../../hooks/useSettings";
 import { useAssetUrlRefresh, useAssetUrlState } from "../../assets/assetUrls";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
@@ -130,6 +130,7 @@ import {
   resolveTimelineMinimapIndexFromPointer,
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
+  resolveTimelineRowItemType,
   resolveWorkGroupScrollIndex,
   shouldFollowWorkGroupAppend,
   shouldPreserveAssistantLineBreaks,
@@ -386,6 +387,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
   const [minimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
   const disclosureAnchorKeyRef = useRef<string | null>(null);
+  // Set while a disclosure toggle may move the viewport away from the end.
+  // If it does, the user opened something to read it: that is a follow break
+  // (pill shown), not drift for ChatView to correct by re-pinning.
+  const disclosureDriftPendingRef = useRef(false);
   const disclosureSettleFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
   const previousContentInsetEndAdjustmentRef = useRef(contentInsetEndAdjustment);
@@ -403,6 +408,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const suspendEndScrollMaintenanceForDisclosure = useCallback((anchorKey: string) => {
     disclosureAnchorKeyRef.current = anchorKey;
+    disclosureDriftPendingRef.current = true;
     setDisclosureToggleSettling(true);
     if (disclosureSettleFrameRef.current !== null) {
       cancelAnimationFrame(disclosureSettleFrameRef.current);
@@ -413,6 +419,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     disclosureSettleFrameRef.current = requestAnimationFrame(() => {
       disclosureSettleSecondFrameRef.current = requestAnimationFrame(() => {
         disclosureAnchorKeyRef.current = null;
+        disclosureDriftPendingRef.current = false;
         setDisclosureToggleSettling(false);
         disclosureSettleFrameRef.current = null;
         disclosureSettleSecondFrameRef.current = null;
@@ -577,7 +584,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const state = listRef.current?.getState?.();
     const isAtEnd = resolveTimelineIsAtEnd(state);
     if (isAtEnd !== undefined && !citationPositioning) {
-      onIsAtEndChange(isAtEnd);
+      if (isAtEnd === false && disclosureDriftPendingRef.current) {
+        disclosureDriftPendingRef.current = false;
+        onManualNavigation();
+      } else {
+        onIsAtEndChange(isAtEnd);
+      }
     }
     if (!state || minimapItems.length === 0) {
       return;
@@ -601,7 +613,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       strip.dataset.inView = inView ? "true" : "false";
     }
-  }, [citationPositioning, listRef, minimapItems, minimapStripMap, onIsAtEndChange]);
+  }, [
+    citationPositioning,
+    listRef,
+    minimapItems,
+    minimapStripMap,
+    onIsAtEndChange,
+    onManualNavigation,
+  ]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(handleScroll);
@@ -707,6 +726,20 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ),
     [],
   );
+  const getItemType = useCallback(
+    (item: MessagesTimelineRow) =>
+      resolveTimelineRowItemType(item, { workLogExpandedByDefault, reasoningExpandedByDefault }),
+    [reasoningExpandedByDefault, workLogExpandedByDefault],
+  );
+  // Rows read the disclosure settings at mount. Before hydration those are
+  // the schema defaults, so mounting now would lay the list out collapsed and
+  // then grow every row at once when the persisted values land, right while
+  // the initial scroll to the end is settling.
+  const clientSettingsHydrated = useClientSettingsHydrated();
+
+  if (!clientSettingsHydrated) {
+    return null;
+  }
 
   if (rows.length === 0 && !isWorking) {
     if (hideEmptyPlaceholder) {
@@ -801,10 +834,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
 function keyExtractor(item: MessagesTimelineRow) {
   return item.id;
-}
-
-function getItemType(item: MessagesTimelineRow) {
-  return item.kind === "message" ? `message:${item.message.role}` : item.kind;
 }
 
 interface TimelineMinimapItem {
