@@ -196,15 +196,22 @@ interface ReasoningBlockState {
   completionEmitted: boolean;
   /** Length of `text` at the last emitted `item.updated` (throttles live updates). */
   lastEmittedLength: number;
-  /** Epoch millis of the last emitted `item.updated` (paces live updates). */
+  /**
+   * Epoch millis of the last emitted `item.updated`, or of the first thinking
+   * text while nothing has been emitted yet (paces live updates).
+   */
   lastEmittedAtMs: number;
 }
 
 /**
- * Live reasoning updates are paced, but the FIRST one goes out as soon as any
- * thinking text exists: upstream (or a proxying shim) may deliver thinking in
- * multi-hundred-char bursts seconds apart, and a pure size threshold would hold
- * the first visible text hostage until it accumulates.
+ * Live reasoning updates are paced, but the FIRST one goes out as soon as a
+ * few words exist: upstream (or a proxying shim) may deliver thinking in
+ * multi-hundred-char bursts seconds apart, and the regular size threshold would
+ * hold the first visible text hostage until it accumulates. The summarizer's
+ * opening delta is usually a single word ("I") that the rest of the sentence
+ * may follow only many seconds later; showing it alone reads as a frozen row,
+ * so a first fragment shorter than FIRST_MIN_CHARS waits for more text (or
+ * FIRST_MAX_WAIT if only fragments keep trickling in).
  *
  * Each emitted `item.updated` persists the full accumulated thinking (capped at
  * the ingestion limit), so the per-block storage cost grows quadratically with
@@ -218,6 +225,8 @@ interface ReasoningBlockState {
 const REASONING_UPDATE_CHUNK = 512;
 const REASONING_UPDATE_MIN_CHARS = 96;
 const REASONING_UPDATE_MIN_INTERVAL_MS = 400;
+const REASONING_FIRST_UPDATE_MIN_CHARS = 16;
+const REASONING_FIRST_UPDATE_MAX_WAIT_MS = 1_500;
 
 /** Whether a live reasoning `item.updated` should go out for the pending text. */
 export function shouldEmitReasoningUpdate(input: {
@@ -229,7 +238,10 @@ export function shouldEmitReasoningUpdate(input: {
     return false;
   }
   if (input.lastEmittedLength === 0) {
-    return true;
+    return (
+      input.pendingChars >= REASONING_FIRST_UPDATE_MIN_CHARS ||
+      input.elapsedMs >= REASONING_FIRST_UPDATE_MAX_WAIT_MS
+    );
   }
   if (input.pendingChars >= REASONING_UPDATE_CHUNK) {
     return true;
@@ -2862,6 +2874,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // update chain into a single row (same mechanism as tool output).
         const reasoningBlock = reasoningBlockEntry?.block;
         const nowMs = reasoningBlock ? DateTime.toEpochMillis(yield* DateTime.now) : 0;
+        if (reasoningBlock && reasoningBlock.lastEmittedAtMs === 0) {
+          // The pacing clock starts with the first thinking text.
+          reasoningBlock.lastEmittedAtMs = nowMs;
+        }
         if (
           reasoningBlock &&
           shouldEmitReasoningUpdate({

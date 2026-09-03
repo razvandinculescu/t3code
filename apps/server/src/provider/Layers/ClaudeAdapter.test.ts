@@ -1387,7 +1387,7 @@ describe("ClaudeAdapterLive", () => {
           index: 0,
           delta: {
             type: "thinking_delta",
-            thinking: "Let me ",
+            thinking: "Let me think this through, ",
           },
         },
       } as unknown as SDKMessage);
@@ -1428,7 +1428,7 @@ describe("ClaudeAdapterLive", () => {
         message: {
           id: "assistant-message-1",
           content: [
-            { type: "thinking", thinking: `Let me ${longThought}` },
+            { type: "thinking", thinking: `Let me think this through, ${longThought}` },
             { type: "text", text: "Done." },
           ],
         },
@@ -1466,24 +1466,24 @@ describe("ClaudeAdapterLive", () => {
       }
       assert.deepEqual(
         reasoningDeltas.map((delta) => (delta.type === "content.delta" ? delta.payload.delta : "")),
-        ["Let me ", longThought],
+        ["Let me think this through, ", longThought],
       );
 
       const reasoningUpdates = runtimeEvents.filter(
         (event) => event.type === "item.updated" && event.payload.itemType === "reasoning",
       );
-      // First text goes out immediately; the 600-char delta crosses the
-      // live-update throttle once more.
+      // The opening sentence goes out as soon as it is a few words long; the
+      // 600-char delta crosses the live-update throttle once more.
       assert.equal(reasoningUpdates.length, 2);
       const firstUpdate = reasoningUpdates[0];
       if (firstUpdate?.type === "item.updated") {
         assert.equal(String(firstUpdate.itemId), String(reasoningItemId));
-        assert.equal(firstUpdate.payload.detail, "Let me ");
+        assert.equal(firstUpdate.payload.detail, "Let me think this through, ");
       }
       const reasoningUpdate = reasoningUpdates[1];
       if (reasoningUpdate?.type === "item.updated") {
         assert.equal(String(reasoningUpdate.itemId), String(reasoningItemId));
-        assert.equal(reasoningUpdate.payload.detail, `Let me ${longThought}`);
+        assert.equal(reasoningUpdate.payload.detail, `Let me think this through, ${longThought}`);
         const updateData = reasoningUpdate.payload.data as { toolCallId?: string } | undefined;
         assert.equal(String(updateData?.toolCallId), String(reasoningItemId));
       }
@@ -1495,7 +1495,10 @@ describe("ClaudeAdapterLive", () => {
       if (reasoningCompleted?.type === "item.completed") {
         assert.equal(String(reasoningCompleted.itemId), String(reasoningItemId));
         assert.equal(reasoningCompleted.payload.status, "completed");
-        assert.equal(reasoningCompleted.payload.detail, `Let me ${longThought}`);
+        assert.equal(
+          reasoningCompleted.payload.detail,
+          `Let me think this through, ${longThought}`,
+        );
         const completedData = reasoningCompleted.payload.data as
           | { toolCallId?: string }
           | undefined;
@@ -1967,7 +1970,7 @@ describe("ClaudeAdapterLive", () => {
           index: 0,
           delta: {
             type: "thinking_delta",
-            thinking: "Let",
+            thinking: "Let me look at this",
           },
         },
       } as unknown as SDKMessage);
@@ -2072,7 +2075,7 @@ describe("ClaudeAdapterLive", () => {
       );
       assert.equal(reasoningDelta?.type, "content.delta");
       if (reasoningDelta?.type === "content.delta") {
-        assert.equal(reasoningDelta.payload.delta, "Let");
+        assert.equal(reasoningDelta.payload.delta, "Let me look at this");
         assert.equal(String(reasoningDelta.turnId), String(turn.turnId));
         // Thinking deltas carry the reasoning itemId (upstream issue #5542).
         assert.equal(String(reasoningDelta.itemId), String(reasoningStarted?.itemId));
@@ -2083,7 +2086,7 @@ describe("ClaudeAdapterLive", () => {
       );
       assert.equal(reasoningCompleted?.type, "item.completed");
       if (reasoningCompleted?.type === "item.completed") {
-        assert.equal(reasoningCompleted.payload.detail, "Let");
+        assert.equal(reasoningCompleted.payload.detail, "Let me look at this");
       }
 
       const toolStarted = runtimeEvents.find(
@@ -6347,10 +6350,25 @@ describe("ClaudeAdapterLive", () => {
 });
 
 describe("shouldEmitReasoningUpdate", () => {
-  it("sends the first text immediately, whatever its size", () => {
+  it("sends the first text once a few words exist", () => {
+    // The summarizer's opening delta is often a lone "I": hold it.
     assert.equal(
       shouldEmitReasoningUpdate({ lastEmittedLength: 0, pendingChars: 1, elapsedMs: 0 }),
+      false,
+    );
+    // The rest of the opening sentence lands: show it, no pacing interval yet.
+    assert.equal(
+      shouldEmitReasoningUpdate({ lastEmittedLength: 0, pendingChars: 16, elapsedMs: 0 }),
       true,
+    );
+    // Only fragments keep trickling in: stop holding them after the max wait.
+    assert.equal(
+      shouldEmitReasoningUpdate({ lastEmittedLength: 0, pendingChars: 3, elapsedMs: 1_500 }),
+      true,
+    );
+    assert.equal(
+      shouldEmitReasoningUpdate({ lastEmittedLength: 0, pendingChars: 3, elapsedMs: 1_000 }),
+      false,
     );
   });
 
