@@ -299,6 +299,13 @@ subagent tasks, interrupts the in-flight turn, and keeps the CLI process so the 
 stopped, the adapter falls back to closing the session; `thread.session.stop` and the idle reaper
 still close the process.
 
+A turn that was steered (a prompt sent while it ran) is closed with the hard stop instead. The SDK
+writes steers to the CLI's stdin at once, so after `interrupt()` the CLI starts the next queued
+prompt on its own, and that request would have no turn to Stop. When the CLI does start a request
+with no turn active (a queued prompt after a turn ended by itself), the adapter opens a synthetic
+turn so the UI shows the work and Stop has a target. An API retry storm (`api_retry`) is reported
+once per storm as a work-log warning; the session heartbeat carries every attempt.
+
 The engine persists an event for the command, and a server-side reactor performs the provider call.
 Provider output comes back as internal commands such as `thread.message.assistant.delta` and
 `thread.session.set`, which clients observe through `orchestration.subscribeThread`. See

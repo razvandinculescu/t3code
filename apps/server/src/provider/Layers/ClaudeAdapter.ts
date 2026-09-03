@@ -146,6 +146,13 @@ interface ClaudeTurnState {
    * steered instead (the queued message continues the same turn).
    */
   readonly synthetic?: boolean;
+  /**
+   * Prompts sent while this turn was running (steers). The SDK writes them to
+   * the CLI's stdin at once, so after the in-flight request is aborted the CLI
+   * starts the next one on its own. Stop on a steered turn therefore closes
+   * the session instead of interrupting cooperatively.
+   */
+  steerCount: number;
   readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
@@ -428,6 +435,12 @@ interface ClaudeSessionContext {
   readonly liveTaskIds: Set<string>;
   turnState: ClaudeTurnState | undefined;
   lastKnownContextWindow: number | undefined;
+  /**
+   * Set once the current API retry storm has been reported as a work-log
+   * warning; cleared when a request gets through (message_start) or a new
+   * prompt is sent, so each storm is one row instead of one per attempt.
+   */
+  apiRetryWarned: boolean;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastKnownTotalProcessedTokens: number | undefined;
   lastAssistantUuid: string | undefined;
@@ -543,10 +556,33 @@ function resultErrorsText(result: SDKResultMessage): string {
  * so they must never become the error banner.
  */
 function resultUserFacingError(result: SDKResultMessage): string | undefined {
-  if (result.subtype === "success" || !Array.isArray(result.errors)) {
+  if (result.subtype === "success") {
+    const text = result.is_error === true ? trimmedString(result.result) : undefined;
+    return text && text.length > 0 ? text : undefined;
+  }
+  if (!Array.isArray(result.errors)) {
     return undefined;
   }
   return result.errors.find((error) => !error.startsWith("[ede_diagnostic]"));
+}
+
+/** Work-log label for the first retry of an API failure storm. */
+export function describeApiRetry(message: {
+  readonly attempt: number;
+  readonly max_retries: number;
+  readonly error_status: number | null;
+  readonly error: unknown;
+}): string {
+  // Current CLIs send the error kind as a string ("overloaded"); older ones
+  // sent an object with a `type`.
+  const kind =
+    typeof message.error === "string"
+      ? message.error
+      : trimmedString((message.error as { type?: unknown } | null)?.type);
+  const cause = [message.error_status === null ? undefined : String(message.error_status), kind]
+    .filter((part) => part !== undefined && part.length > 0)
+    .join(" ");
+  return `API request failed${cause.length > 0 ? ` (${cause})` : ""}; Claude Code is retrying, attempt ${message.attempt} of ${message.max_retries}.`;
 }
 
 function isInterruptedResult(result: SDKResultMessage): boolean {
@@ -1495,14 +1531,16 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
 });
 
 function turnStatusFromResult(result: SDKResultMessage): ProviderRuntimeTurnStatus {
-  if (result.subtype === "success") {
-    return "completed";
-  }
-
-  const errors = resultErrorsText(result);
   if (isInterruptedResult(result)) {
     return "interrupted";
   }
+  if (result.subtype === "success") {
+    // The CLI reports an exhausted retry storm (e.g. ten 529s) as a "success"
+    // result with is_error and the API error as its text; that turn failed.
+    return result.is_error === true ? "failed" : "completed";
+  }
+
+  const errors = resultErrorsText(result);
   if (errors.includes("cancel")) {
     return "cancelled";
   }
@@ -2783,6 +2821,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (event.type === "message_start") {
+      context.apiRetryWarned = false;
       // Track the API message id so streamed reasoning blocks can be told
       // apart from same-index blocks of other messages (snapshot dedup).
       if (streamParentToolUseId === null || streamParentToolUseId === undefined) {
@@ -3346,49 +3385,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // Auto-start a synthetic turn for assistant messages that arrive without
     // an active turn (e.g., background agent/subagent responses between user prompts).
     if (!context.turnState) {
-      const turnId = TurnId.make(yield* randomUUIDv4);
-      const startedAt = yield* nowIso;
-      context.turnState = {
-        turnId,
-        startedAt,
-        synthetic: true,
-        items: [],
-        assistantTextBlocks: new Map(),
-        assistantTextBlockOrder: [],
-        reasoningBlocks: new Map(),
-        emittedReasoningBlockKeys: new Set(),
-        activeStreamMessageId: undefined,
-        completed: yield* Deferred.make<void>(),
-        capturedProposedPlanKeys: new Set(),
-        latestAssistantUsage: undefined,
-        compactedSinceLatestAssistantUsage: false,
-        nextSyntheticAssistantBlockIndex: -1,
-      };
-      context.session = {
-        ...context.session,
-        status: "running",
-        activeTurnId: turnId,
-        updatedAt: startedAt,
-      };
-      const turnStartedStamp = yield* makeEventStamp();
-      yield* offerRuntimeEvent({
-        type: "turn.started",
-        eventId: turnStartedStamp.eventId,
-        provider: PROVIDER,
-        createdAt: turnStartedStamp.createdAt,
-        threadId: context.session.threadId,
-        turnId,
-        payload: {},
-        providerRefs: {
-          ...nativeProviderRefs(context),
-          providerTurnId: turnId,
-        },
-        raw: {
-          source: "claude.sdk.message",
-          method: "claude/synthetic-turn-start",
-          payload: {},
-        },
-      });
+      yield* startSyntheticTurn(context);
     }
 
     const content = message.message?.content;
@@ -3534,6 +3531,62 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
   });
 
+  /**
+   * Opens a turn for CLI work that no sendTurn started: assistant output
+   * between prompts (background agents) or a request the CLI begins on its
+   * own from a queued prompt after the previous turn ended. Without it the
+   * session reads "running" with nothing to Stop and nothing to show.
+   */
+  const startSyntheticTurn = Effect.fn("startSyntheticTurn")(function* (
+    context: ClaudeSessionContext,
+  ) {
+    const turnId = TurnId.make(yield* randomUUIDv4);
+    const startedAt = yield* nowIso;
+    context.turnState = {
+      turnId,
+      startedAt,
+      synthetic: true,
+      steerCount: 0,
+      items: [],
+      assistantTextBlocks: new Map(),
+      assistantTextBlockOrder: [],
+      reasoningBlocks: new Map(),
+      emittedReasoningBlockKeys: new Set(),
+      activeStreamMessageId: undefined,
+      completed: yield* Deferred.make<void>(),
+      capturedProposedPlanKeys: new Set(),
+      latestAssistantUsage: undefined,
+      compactedSinceLatestAssistantUsage: false,
+      nextSyntheticAssistantBlockIndex: -1,
+    };
+    context.session = {
+      ...context.session,
+      status: "running",
+      activeTurnId: turnId,
+      updatedAt: startedAt,
+    };
+    const turnStartedStamp = yield* makeEventStamp();
+    yield* offerRuntimeEvent({
+      type: "turn.started",
+      eventId: turnStartedStamp.eventId,
+      provider: PROVIDER,
+      createdAt: turnStartedStamp.createdAt,
+      threadId: context.session.threadId,
+      turnId,
+      payload: {},
+      providerRefs: {
+        ...nativeProviderRefs(context),
+        providerTurnId: turnId,
+      },
+      raw: {
+        source: "claude.sdk.message",
+        method: "claude/synthetic-turn-start",
+        payload: {},
+      },
+    });
+    return turnId;
+  });
+
   const handleSystemMessage = Effect.fn("handleSystemMessage")(function* (
     context: ClaudeSessionContext,
     message: SDKMessage,
@@ -3585,9 +3638,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
-      case "status":
+      case "status": {
+        // A request starting with no turn is a queued prompt the CLI picked up
+        // after the previous turn ended (a steer whose turn failed or was
+        // stopped). Give it a turn so the UI shows the work and Stop has a target.
+        if (message.status === "requesting" && !context.turnState) {
+          yield* startSyntheticTurn(context);
+        }
         yield* offerRuntimeEvent({
           ...base,
+          ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
           type: "session.state.changed",
           payload: {
             state: message.status === "compacting" ? "waiting" : "running",
@@ -3596,6 +3656,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
+      }
       case "compact_boundary":
         if (context.turnState) {
           context.turnState.latestAssistantUsage = undefined;
@@ -3842,10 +3903,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       case "thinking_tokens":
         return;
       case "api_retry":
-        // Transport-level retry heartbeat. Surfacing each attempt as a
-        // warning row spammed the work log (10 rows during a 502 storm);
-        // the terminal result/error path reports the actual failure. Keep
-        // the session visibly alive instead.
+        // Transport-level retry heartbeat. One warning row per storm tells
+        // the user why nothing is streaming (ten 529 retries take close to
+        // three minutes); a row per attempt spammed the work log, and the
+        // terminal result/error path reports the actual failure.
+        if (!context.apiRetryWarned) {
+          context.apiRetryWarned = true;
+          yield* emitRuntimeWarning(context, describeApiRetry(message));
+        }
         yield* offerRuntimeEvent({
           ...base,
           type: "session.state.changed",
@@ -4927,6 +4992,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         liveTaskIds,
         turnState: undefined,
         lastKnownContextWindow: initialContextWindow,
+        apiRetryWarned: false,
         lastKnownTokenUsage: undefined,
         lastKnownTotalProcessedTokens: undefined,
         lastAssistantUuid: resumeState?.resumeSessionAt,
@@ -5031,6 +5097,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (context.turnState && steeringTurnState === null) {
       yield* completeTurn(context, "completed");
     }
+    if (steeringTurnState !== null) {
+      steeringTurnState.steerCount += 1;
+    }
+    context.apiRetryWarned = false;
 
     if (modelSelection?.model) {
       const apiModelId = resolveClaudeCatalogApiModelId(modelCatalog, modelSelection);
@@ -5076,6 +5146,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const turnState: ClaudeTurnState = {
         turnId,
         startedAt: yield* nowIso,
+        steerCount: 0,
         items: [],
         assistantTextBlocks: new Map(),
         assistantTextBlockOrder: [],
@@ -5164,6 +5235,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const targetTurn = context.turnState;
       // A Stop aimed at a turn that already ended must not touch its successor.
       if (turnId !== undefined && targetTurn !== undefined && targetTurn.turnId !== turnId) {
+        return;
+      }
+
+      // Steered prompts already sit in the CLI's stdin. interrupt() aborts
+      // only the in-flight request; the CLI then starts the next queued
+      // prompt on its own, leaving a request running with no turn to Stop.
+      // Only the hard stop drops that queue.
+      if (targetTurn !== undefined && targetTurn.steerCount > 0) {
+        yield* stopSessionInternal(context);
         return;
       }
 

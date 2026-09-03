@@ -3846,7 +3846,7 @@ describe("ClaudeAdapterLive", () => {
           uuid,
         } as unknown as SDKMessage);
       }
-      // api_retry maps to a session heartbeat, not a warning row.
+      // api_retry maps to a session heartbeat plus one warning row per storm.
       harness.query.emit({
         type: "system",
         subtype: "api_retry",
@@ -3862,10 +3862,14 @@ describe("ClaudeAdapterLive", () => {
       yield* Effect.yieldNow;
 
       const warnings = runtimeEvents.filter((event) => event.type === "runtime.warning");
-      // Exactly one warning: the high-priority notification. Nothing else.
+      // Two warnings: the high-priority notification and the retry storm. Nothing
+      // else in the batch produces a row.
       assert.deepEqual(
         warnings.map((event) => event.payload.message),
-        ["context window nearly full"],
+        [
+          "context window nearly full",
+          "API request failed (502 api_error); Claude Code is retrying, attempt 3 of 10.",
+        ],
       );
       const sessionStates = runtimeEvents
         .filter((event) => event.type === "session.state.changed")
@@ -6341,6 +6345,232 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(
         nativeThreadIds.every((threadId) => threadId === String(THREAD_ID)),
         true,
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("reports an API retry storm as one warning row until a request gets through", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runCollect, Effect.forkChild);
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+
+      const emitRetry = (attempt: number, uuid: string) =>
+        harness.query.emit({
+          type: "system",
+          subtype: "api_retry",
+          attempt,
+          max_retries: 10,
+          retry_delay_ms: 1000,
+          error_status: 529,
+          error: "overloaded",
+          session_id: "sdk-session",
+          uuid,
+        } as unknown as SDKMessage);
+
+      // One storm: attempts 1..3 collapse into a single row.
+      emitRetry(1, "retry-1");
+      emitRetry(2, "retry-2");
+      emitRetry(3, "retry-3");
+      // A request gets through, then a new storm starts: one more row.
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session",
+        uuid: "stream-1",
+        parent_tool_use_id: null,
+        event: { type: "message_start", message: { id: "msg-1" } },
+      } as unknown as SDKMessage);
+      emitRetry(1, "retry-4");
+      emitRetry(2, "retry-5");
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session",
+        uuid: "result-1",
+      } as unknown as SDKMessage);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const warnings = events.filter((event) => event.type === "runtime.warning");
+      assert.deepEqual(
+        warnings.map((event) => event.type === "runtime.warning" && event.payload.message),
+        [
+          "API request failed (529 overloaded); Claude Code is retrying, attempt 1 of 10.",
+          "API request failed (529 overloaded); Claude Code is retrying, attempt 1 of 10.",
+        ],
+      );
+      // Every attempt still reaches the session heartbeat.
+      const heartbeats = events.filter(
+        (event) =>
+          event.type === "session.state.changed" &&
+          typeof event.payload.reason === "string" &&
+          event.payload.reason.startsWith("api_retry:"),
+      );
+      assert.equal(heartbeats.length, 5);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("interruptTurn closes the session when the turn was steered", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const turnEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "turn.started" || event.type === "turn.completed"),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "first",
+        attachments: [],
+      });
+      // The steer is already in the CLI's stdin; a cooperative interrupt
+      // would let the CLI run it as a request with no turn to Stop.
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "and this", attachments: [] });
+
+      yield* adapter.interruptTurn(session.threadId, turn.turnId);
+
+      const turnEvents = Array.from(yield* Fiber.join(turnEventsFiber));
+      assert.deepEqual(
+        turnEvents.map((event) => event.type),
+        ["turn.started", "turn.completed"],
+      );
+      const completed = turnEvents[1];
+      assert.equal(completed?.type === "turn.completed" && completed.payload.state, "interrupted");
+      assert.equal(harness.query.interruptCalls.length, 0);
+      assert.equal(harness.query.closeCalls, 1);
+      assert.equal(yield* adapter.hasSession(session.threadId), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("opens a synthetic turn when the CLI starts a request with no turn active", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const turnEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "turn.started" || event.type === "turn.completed"),
+        Stream.take(4),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "first",
+        attachments: [],
+      });
+      // The turn ends on its own (e.g. an exhausted retry storm) ...
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session",
+        uuid: "result-1",
+      } as unknown as SDKMessage);
+      // ... and the CLI starts the next queued prompt by itself.
+      harness.query.emit({
+        type: "system",
+        subtype: "status",
+        status: "requesting",
+        session_id: "sdk-session",
+        uuid: "status-1",
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      // Stop now has a target: the synthetic turn.
+      yield* adapter.interruptTurn(session.threadId);
+
+      const turnEvents = Array.from(yield* Fiber.join(turnEventsFiber));
+      assert.deepEqual(
+        turnEvents.map((event) => event.type),
+        ["turn.started", "turn.completed", "turn.started", "turn.completed"],
+      );
+      const syntheticStarted = turnEvents[2];
+      const syntheticCompleted = turnEvents[3];
+      assert.notEqual(String(syntheticStarted?.turnId), String(turn.turnId));
+      assert.equal(String(syntheticCompleted?.turnId), String(syntheticStarted?.turnId));
+      assert.equal(
+        syntheticCompleted?.type === "turn.completed" && syntheticCompleted.payload.state,
+        "interrupted",
+      );
+      assert.equal(harness.query.interruptCalls.length, 1);
+      assert.equal(yield* adapter.hasSession(session.threadId), true);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("fails the turn when a success result is flagged is_error", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runCollect, Effect.forkChild);
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+
+      // What the CLI emits after ten 529s: a "success" that is an error.
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        api_error_status: 529,
+        num_turns: 1,
+        stop_reason: "stop_sequence",
+        result: "API Error: 529 Overloaded. This is a server-side issue, usually temporary.",
+        session_id: "sdk-session",
+        uuid: "result-error",
+      } as unknown as SDKMessage);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const completed = events.find((event) => event.type === "turn.completed");
+      assert.equal(completed?.type === "turn.completed" && completed.payload.state, "failed");
+      assert.equal(
+        completed?.type === "turn.completed" && completed.payload.errorMessage,
+        "API Error: 529 Overloaded. This is a server-side issue, usually temporary.",
+      );
+      const runtimeError = events.find((event) => event.type === "runtime.error");
+      assert.equal(
+        runtimeError?.type === "runtime.error" && runtimeError.payload.message,
+        "API Error: 529 Overloaded. This is a server-side issue, usually temporary.",
       );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
