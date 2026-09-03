@@ -196,21 +196,49 @@ interface ReasoningBlockState {
   completionEmitted: boolean;
   /** Length of `text` at the last emitted `item.updated` (throttles live updates). */
   lastEmittedLength: number;
+  /** Epoch millis of the last emitted `item.updated` (paces live updates). */
+  lastEmittedAtMs: number;
 }
 
 /**
- * Live reasoning updates are throttled, but the FIRST one goes out as soon as
- * any thinking text exists: upstream (or a proxying shim) may deliver thinking
- * in multi-hundred-char bursts seconds apart, and a pure size threshold would
- * hold the first visible text hostage until 256 chars accumulate.
+ * Live reasoning updates are paced, but the FIRST one goes out as soon as any
+ * thinking text exists: upstream (or a proxying shim) may deliver thinking in
+ * multi-hundred-char bursts seconds apart, and a pure size threshold would hold
+ * the first visible text hostage until it accumulates.
  *
  * Each emitted `item.updated` persists the full accumulated thinking (capped at
  * the ingestion limit), so the per-block storage cost grows quadratically with
- * 1/CHUNK. 512 chars keeps the live row visibly streaming (a handful of updates
- * per second at typical thinking speeds) while bounding that cost ~10x tighter
- * than a per-delta threshold would.
+ * the update count. The pacing below is tuned to the API's summarized-thinking
+ * cadence measured live (chunks of ~150-200 chars every 0.5-7 s): a chunk of
+ * at least MIN_CHARS goes out once MIN_INTERVAL has passed since the previous
+ * update, so the row advances with every chunk the API delivers instead of
+ * waiting for several of them to pile up; CHUNK is the hard cap that flushes
+ * regardless of pacing when a large burst lands at once.
  */
 const REASONING_UPDATE_CHUNK = 512;
+const REASONING_UPDATE_MIN_CHARS = 96;
+const REASONING_UPDATE_MIN_INTERVAL_MS = 400;
+
+/** Whether a live reasoning `item.updated` should go out for the pending text. */
+export function shouldEmitReasoningUpdate(input: {
+  readonly lastEmittedLength: number;
+  readonly pendingChars: number;
+  readonly elapsedMs: number;
+}): boolean {
+  if (input.pendingChars <= 0) {
+    return false;
+  }
+  if (input.lastEmittedLength === 0) {
+    return true;
+  }
+  if (input.pendingChars >= REASONING_UPDATE_CHUNK) {
+    return true;
+  }
+  return (
+    input.pendingChars >= REASONING_UPDATE_MIN_CHARS &&
+    input.elapsedMs >= REASONING_UPDATE_MIN_INTERVAL_MS
+  );
+}
 
 /**
  * Dedup key shared by live-streamed and snapshot-backfilled reasoning items:
@@ -1998,6 +2026,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       text: "",
       completionEmitted: false,
       lastEmittedLength: 0,
+      lastEmittedAtMs: 0,
     };
     turnState.reasoningBlocks.set(blockIndex, block);
 
@@ -2831,12 +2860,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // thinking and a stable `data.toolCallId`, so the client collapses the
         // update chain into a single row (same mechanism as tool output).
         const reasoningBlock = reasoningBlockEntry?.block;
+        const nowMs = reasoningBlock ? DateTime.toEpochMillis(yield* DateTime.now) : 0;
         if (
           reasoningBlock &&
-          (reasoningBlock.lastEmittedLength === 0 ||
-            reasoningBlock.text.length - reasoningBlock.lastEmittedLength >= REASONING_UPDATE_CHUNK)
+          shouldEmitReasoningUpdate({
+            lastEmittedLength: reasoningBlock.lastEmittedLength,
+            pendingChars: reasoningBlock.text.length - reasoningBlock.lastEmittedLength,
+            elapsedMs: nowMs - reasoningBlock.lastEmittedAtMs,
+          })
         ) {
           reasoningBlock.lastEmittedLength = reasoningBlock.text.length;
+          reasoningBlock.lastEmittedAtMs = nowMs;
           const updateStamp = yield* makeEventStamp();
           yield* offerRuntimeEvent({
             type: "item.updated",

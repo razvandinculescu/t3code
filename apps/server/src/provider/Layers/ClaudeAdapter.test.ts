@@ -44,7 +44,11 @@ import {
 } from "../ClaudeModelCatalog.testFixtures.ts";
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
-import { makeClaudeAdapter, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
+import {
+  makeClaudeAdapter,
+  type ClaudeAdapterLiveOptions,
+  shouldEmitReasoningUpdate,
+} from "./ClaudeAdapter.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -6219,6 +6223,47 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
+    );
+  });
+});
+
+describe("shouldEmitReasoningUpdate", () => {
+  it("sends the first text immediately, whatever its size", () => {
+    assert.equal(
+      shouldEmitReasoningUpdate({ lastEmittedLength: 0, pendingChars: 1, elapsedMs: 0 }),
+      true,
+    );
+  });
+
+  it("sends nothing when no new text is pending", () => {
+    assert.equal(
+      shouldEmitReasoningUpdate({ lastEmittedLength: 0, pendingChars: 0, elapsedMs: 5_000 }),
+      false,
+    );
+  });
+
+  it("paces summarized-thinking chunks: enough text and enough time", () => {
+    // One API chunk (~150 chars) after the previous update settled.
+    assert.equal(
+      shouldEmitReasoningUpdate({ lastEmittedLength: 40, pendingChars: 150, elapsedMs: 400 }),
+      true,
+    );
+    // Same chunk landing in the same instant as the previous update: hold it.
+    assert.equal(
+      shouldEmitReasoningUpdate({ lastEmittedLength: 40, pendingChars: 150, elapsedMs: 0 }),
+      false,
+    );
+    // Time has passed but only a few characters arrived: hold them too.
+    assert.equal(
+      shouldEmitReasoningUpdate({ lastEmittedLength: 40, pendingChars: 20, elapsedMs: 5_000 }),
+      false,
+    );
+  });
+
+  it("flushes a large burst regardless of pacing", () => {
+    assert.equal(
+      shouldEmitReasoningUpdate({ lastEmittedLength: 40, pendingChars: 512, elapsedMs: 0 }),
+      true,
     );
   });
 });
