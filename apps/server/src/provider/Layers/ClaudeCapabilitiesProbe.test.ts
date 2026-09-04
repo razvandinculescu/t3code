@@ -1,6 +1,9 @@
 import { ClaudeSettings } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import * as Cache from "effect/Cache";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -13,6 +16,7 @@ import {
   CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES,
   externalClaudeUsageLimitsFromJson,
   probeClaudeCapabilities,
+  probeExternalClaudeUsageLimits,
 } from "./ClaudeProvider.ts";
 
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
@@ -78,40 +82,62 @@ it("rejects malformed wrapper usage instead of publishing misleading limits", ()
   assert.equal(externalClaudeUsageLimitsFromJson("not json", "2026-09-04T12:00:00Z"), undefined);
 });
 
+const CACHED_USAGE_FILE = JSON.stringify({
+  unrelated: "ignored",
+  cachedUsageUtilization: {
+    fetchedAtMs: Date.parse("2026-09-04T08:33:24.364Z"),
+    utilization: {
+      five_hour: { utilization: 11, resets_at: "2026-09-04T12:00:00Z" },
+      seven_day: { utilization: 6, resets_at: "2026-09-11T06:00:00Z" },
+      limits: [
+        {
+          kind: "weekly_scoped",
+          percent: 11,
+          resets_at: "2026-09-11T06:00:00Z",
+          scope: { model: { display_name: "Fable" } },
+        },
+      ],
+    },
+  },
+});
+
 it("maps Claude's cached usage without reading credentials", () => {
   assert.deepEqual(
-    cachedClaudeUsageFromJson(
-      JSON.stringify({
-        unrelated: "ignored",
-        cachedUsageUtilization: {
-          fetchedAtMs: 1_788_510_804_364,
-          utilization: {
-            five_hour: { utilization: 11, resets_at: "2026-09-04T12:00:00Z" },
-            seven_day: { utilization: 6, resets_at: "2026-09-11T06:00:00Z" },
-            limits: [
-              {
-                kind: "weekly_scoped",
-                percent: 11,
-                resets_at: "2026-09-11T06:00:00Z",
-                scope: { model: { display_name: "Fable" } },
-              },
-            ],
-          },
-        },
-      }),
-    ),
+    cachedClaudeUsageFromJson(CACHED_USAGE_FILE, DateTime.makeUnsafe("2026-09-04T10:00:00Z")),
     {
-      rate_limits_available: true,
-      rate_limits: {
-        five_hour: { utilization: 11, resets_at: "2026-09-04T12:00:00Z" },
-        seven_day: { utilization: 6, resets_at: "2026-09-11T06:00:00Z" },
-        ...({
-          model_scoped: [
-            { display_name: "Fable", utilization: 11, resets_at: "2026-09-11T06:00:00Z" },
-          ],
-        } as object),
+      usage: {
+        rate_limits_available: true,
+        rate_limits: {
+          five_hour: { utilization: 11, resets_at: "2026-09-04T12:00:00Z" },
+          seven_day: { utilization: 6, resets_at: "2026-09-11T06:00:00Z" },
+          ...({
+            model_scoped: [
+              { display_name: "Fable", utilization: 11, resets_at: "2026-09-11T06:00:00Z" },
+            ],
+          } as object),
+        },
       },
+      // The cache's own fetch time, not the status check that read it.
+      checkedAt: "2026-09-04T08:33:24.364Z",
     },
+  );
+});
+
+it("drops cached windows whose reset already passed", () => {
+  const afterSessionReset = cachedClaudeUsageFromJson(
+    CACHED_USAGE_FILE,
+    DateTime.makeUnsafe("2026-09-04T13:00:00Z"),
+  );
+  assert.deepEqual(afterSessionReset?.usage.rate_limits, {
+    seven_day: { utilization: 6, resets_at: "2026-09-11T06:00:00Z" },
+    ...({
+      model_scoped: [{ display_name: "Fable", utilization: 11, resets_at: "2026-09-11T06:00:00Z" }],
+    } as object),
+  });
+
+  assert.equal(
+    cachedClaudeUsageFromJson(CACHED_USAGE_FILE, DateTime.makeUnsafe("2026-09-11T06:00:01Z")),
+    undefined,
   );
 });
 
@@ -324,6 +350,66 @@ it.layer(NodeServices.layer)("external Claude usage probe", (it) => {
         tempDir,
       );
       assert.equal(hidden.usageLimits, undefined);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("reuses a memoized wrapper probe instead of respawning the binary", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-external-usage-cache-" });
+      const executablePath = path.join(tempDir, "fake-provider.mjs");
+      const spawnLog = path.join(tempDir, "spawns.log");
+      yield* fs.writeFileString(
+        executablePath,
+        [
+          "#!/usr/bin/env node",
+          'import { appendFileSync } from "node:fs";',
+          "const flag = process.argv[2];",
+          'if (flag === "--version") { console.log("2.1.258"); process.exit(0); }',
+          'if (flag === "--t3-usage-limits-json") {',
+          '  appendFileSync(process.env.T3_SPAWN_LOG, "probe\\n");',
+          "  console.log(JSON.stringify({ version: 1, windows: [{",
+          '    id: "vendor_weekly", kind: "weekly", label: "Weekly", usedPercent: 37,',
+          "  }] }));",
+          "  process.exit(0);",
+          "}",
+          "process.exit(2);",
+          "",
+        ].join("\n"),
+      );
+      yield* fs.chmod(executablePath, 0o755);
+
+      const capabilities = {
+        email: undefined,
+        subscriptionType: undefined,
+        tokenSource: "apiKey",
+        apiProvider: undefined,
+        slashCommands: [],
+        usage: { rate_limits_available: false, rate_limits: null },
+      };
+      const settings = decodeClaudeSettings({ binaryPath: executablePath });
+      const environment = { ...process.env, T3_SPAWN_LOG: spawnLog };
+      const probeCache = yield* Cache.make({
+        capacity: 1,
+        timeToLive: Duration.minutes(15),
+        lookup: () => probeExternalClaudeUsageLimits(settings, environment),
+      });
+      const check = checkClaudeProviderStatus(
+        settings,
+        () => Effect.succeed(capabilities),
+        environment,
+        tempDir,
+        undefined,
+        undefined,
+        () => Cache.get(probeCache, "probe"),
+      );
+
+      const first = yield* check;
+      const second = yield* check;
+      assert.equal(first.usageLimits?.windows[0]?.usedPercent, 37);
+      assert.deepEqual(second.usageLimits, first.usageLimits);
+      assert.equal(yield* fs.readFileString(spawnLog), "probe\n");
     }).pipe(Effect.scoped),
   );
 });

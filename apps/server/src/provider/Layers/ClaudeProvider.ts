@@ -335,31 +335,63 @@ const CachedClaudeUsageFile = Schema.fromJsonString(
 );
 const decodeCachedClaudeUsageFile = Schema.decodeUnknownOption(CachedClaudeUsageFile);
 
-export function cachedClaudeUsageFromJson(raw: string): ClaudeCapabilitiesProbe["usage"] {
+/** Usage windows recovered from Claude Code's on-disk cache, stamped with when the CLI fetched them. */
+export type CachedClaudeUsage = {
+  readonly usage: NonNullable<ClaudeCapabilitiesProbe["usage"]>;
+  readonly checkedAt: string;
+};
+
+/**
+ * The CLI refreshes this cache on its own schedule, so it can be hours old.
+ * A window whose reset already passed would publish a dead percentage next
+ * to a past reset time, so it is dropped; the survivors carry the cache's
+ * own `fetchedAtMs` as `checkedAt` instead of pretending to be fresh.
+ */
+export function cachedClaudeUsageFromJson(
+  raw: string,
+  now: DateTime.Utc,
+): CachedClaudeUsage | undefined {
   const decoded = decodeCachedClaudeUsageFile(raw);
   if (Option.isNone(decoded)) return undefined;
   const cached = decoded.value.cachedUsageUtilization;
-  const { five_hour, seven_day, limits = [] } = cached.utilization;
+  const nowMs = DateTime.toEpochMillis(now);
+  const isCurrent = (resetsAt: string | null) => {
+    if (!resetsAt) return true;
+    const reset = DateTime.make(resetsAt);
+    return Option.isNone(reset) || DateTime.toEpochMillis(reset.value) > nowMs;
+  };
+  const { limits = [] } = cached.utilization;
+  const five_hour = cached.utilization.five_hour ?? null;
+  const seven_day = cached.utilization.seven_day ?? null;
+  const currentFiveHour = five_hour && isCurrent(five_hour.resets_at) ? five_hour : null;
+  const currentSevenDay = seven_day && isCurrent(seven_day.resets_at) ? seven_day : null;
   const modelScoped = limits.flatMap((limit) => {
     const displayName = limit.scope?.model?.display_name;
-    return limit.kind === "weekly_scoped" && displayName && limit.percent !== null
+    return limit.kind === "weekly_scoped" &&
+      displayName &&
+      limit.percent !== null &&
+      isCurrent(limit.resets_at)
       ? [{ display_name: displayName, utilization: limit.percent, resets_at: limit.resets_at }]
       : [];
   });
-  if (!five_hour && !seven_day && modelScoped.length === 0) return undefined;
+  if (!currentFiveHour && !currentSevenDay && modelScoped.length === 0) return undefined;
+  const fetchedAt = Option.getOrElse(DateTime.make(cached.fetchedAtMs), () => now);
   return {
-    rate_limits_available: true,
-    rate_limits: {
-      ...(five_hour ? { five_hour } : {}),
-      ...(seven_day ? { seven_day } : {}),
-      ...(modelScoped.length > 0 ? { model_scoped: modelScoped } : {}),
-    },
-  } as ClaudeCapabilitiesProbe["usage"];
+    usage: {
+      rate_limits_available: true,
+      rate_limits: {
+        ...(currentFiveHour ? { five_hour: currentFiveHour } : {}),
+        ...(currentSevenDay ? { seven_day: currentSevenDay } : {}),
+        ...(modelScoped.length > 0 ? { model_scoped: modelScoped } : {}),
+      },
+    } as NonNullable<ClaudeCapabilitiesProbe["usage"]>,
+    checkedAt: DateTime.formatIso(fetchedAt),
+  };
 }
 
 const readCachedClaudeUsage = Effect.fn("readCachedClaudeUsage")(function* (
   claudeSettings: ClaudeSettings,
-): Effect.fn.Return<ClaudeCapabilitiesProbe["usage"], never, FileSystem.FileSystem | Path.Path> {
+): Effect.fn.Return<CachedClaudeUsage | undefined, never, FileSystem.FileSystem | Path.Path> {
   // Custom CLAUDE_CONFIG_DIR layouts are not guaranteed to use ~/.claude.json.
   if (claudeSettings.homePath.trim().length > 0) return undefined;
   const fs = yield* FileSystem.FileSystem;
@@ -370,7 +402,7 @@ const readCachedClaudeUsage = Effect.fn("readCachedClaudeUsage")(function* (
     Effect.catchCause(() => Effect.succeed(undefined)),
   );
   if (raw === undefined) return undefined;
-  return cachedClaudeUsageFromJson(raw);
+  return cachedClaudeUsageFromJson(raw, yield* DateTime.now);
 });
 
 function parseClaudeInitializationCommands(
@@ -543,26 +575,30 @@ const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
   return yield* spawnAndCollect(claudeSettings.binaryPath, command);
 });
 
+const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
 /**
  * Optional wrapper protocol for Anthropic-compatible subscription providers.
  * Unknown binaries simply reject the flag and retain the normal unsupported
  * result; wrappers that own a credential return only normalized quota data.
+ * Spawns the binary, so the driver memoizes it under the capabilities TTL
+ * (`resolveExternalUsage` on `checkClaudeProviderStatus`); the limits carry
+ * the time of that spawn, not of the status check that reused them.
  */
-const probeExternalClaudeUsageLimits = Effect.fn("probeExternalClaudeUsageLimits")(function* (
-  claudeSettings: ClaudeSettings,
-  checkedAt: string,
-  environment?: NodeJS.ProcessEnv,
-) {
-  const result = yield* runClaudeCommand(
-    claudeSettings,
-    [EXTERNAL_USAGE_PROBE_ARG],
-    environment,
-  ).pipe(Effect.timeoutOption(EXTERNAL_USAGE_PROBE_TIMEOUT_MS), Effect.result);
-  if (Result.isFailure(result) || Option.isNone(result.success)) return undefined;
-  const command = result.success.value;
-  if (command.code !== 0) return undefined;
-  return externalClaudeUsageLimitsFromJson(command.stdout, checkedAt);
-});
+export const probeExternalClaudeUsageLimits = Effect.fn("probeExternalClaudeUsageLimits")(
+  function* (claudeSettings: ClaudeSettings, environment?: NodeJS.ProcessEnv) {
+    const checkedAt = yield* nowIso;
+    const result = yield* runClaudeCommand(
+      claudeSettings,
+      [EXTERNAL_USAGE_PROBE_ARG],
+      environment,
+    ).pipe(Effect.timeoutOption(EXTERNAL_USAGE_PROBE_TIMEOUT_MS), Effect.result);
+    if (Result.isFailure(result) || Option.isNone(result.success)) return undefined;
+    const command = result.success.value;
+    if (command.code !== 0) return undefined;
+    return externalClaudeUsageLimitsFromJson(command.stdout, checkedAt);
+  },
+);
 
 export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(function* (
   claudeSettings: ClaudeSettings,
@@ -574,6 +610,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   modelCatalog: ClaudeModelCatalog = BUNDLED_CLAUDE_MODEL_CATALOG,
   /** Shared with the adapter so turn events reuse the scoped-bucket names this probe saw. */
   scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>,
+  /** Memoized wrapper usage probe; defaults to spawning the binary on every check. */
+  resolveExternalUsage?: (
+    claudeSettings: ClaudeSettings,
+  ) => Effect.Effect<ExternalClaudeUsageLimits | undefined>,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -714,10 +754,13 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     (!capabilities.usage?.rate_limits_available || !capabilities.usage.rate_limits)
       ? yield* readCachedClaudeUsage(claudeSettings)
       : undefined;
-  const effectiveUsage = cachedUsage ?? capabilities.usage;
+  const effectiveUsage = cachedUsage?.usage ?? capabilities.usage;
+  const usageCheckedAt = cachedUsage?.checkedAt ?? checkedAt;
   const externalUsage =
     usageUnavailable.reason === "unsupported"
-      ? yield* probeExternalClaudeUsageLimits(claudeSettings, checkedAt, resolvedEnvironment)
+      ? yield* resolveExternalUsage
+          ? resolveExternalUsage(claudeSettings)
+          : probeExternalClaudeUsageLimits(claudeSettings, resolvedEnvironment)
       : undefined;
   const usageLimits =
     externalUsage?.kind === "hidden"
@@ -729,7 +772,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
           : scopedLimitNames
             ? yield* recordClaudeUsageResponse(scopedLimitNames, {
                 response: effectiveUsage,
-                checkedAt,
+                checkedAt: usageCheckedAt,
                 unavailableReason: usageUnavailable.reason,
                 ...(usageUnavailable.message
                   ? { unavailableMessage: usageUnavailable.message }
@@ -737,7 +780,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
               })
             : claudeUsageResponseToLimits({
                 response: effectiveUsage,
-                checkedAt,
+                checkedAt: usageCheckedAt,
                 unavailableReason: usageUnavailable.reason,
                 ...(usageUnavailable.message
                   ? { unavailableMessage: usageUnavailable.message }
@@ -764,8 +807,6 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     },
   });
 });
-
-const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 export const makePendingClaudeProvider = (
   claudeSettings: ClaudeSettings,
