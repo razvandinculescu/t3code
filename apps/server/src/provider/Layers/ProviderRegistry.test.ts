@@ -2386,6 +2386,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   stderr: "",
                   code: 0,
                 };
+              if (joined === "--t3-usage-limits-json") return { stdout: "", stderr: "", code: 1 };
               throw new Error(`Unexpected args: ${joined}`);
             }),
           ),
@@ -2410,6 +2411,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
               if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--t3-usage-limits-json") return { stdout: "", stderr: "", code: 1 };
               throw new Error(`Unexpected args: ${joined}`);
             }),
           ),
@@ -2437,6 +2439,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   stderr: "",
                   code: 0,
                 };
+              if (joined === "--t3-usage-limits-json") return { stdout: "", stderr: "", code: 1 };
               throw new Error(`Unexpected args: ${joined}`);
             }),
           ),
@@ -2459,6 +2462,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
               if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--t3-usage-limits-json") return { stdout: "", stderr: "", code: 1 };
               throw new Error(`Unexpected args: ${joined}`);
             }),
           ),
@@ -2481,6 +2485,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
               if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--t3-usage-limits-json") return { stdout: "", stderr: "", code: 1 };
               throw new Error(`Unexpected args: ${joined}`);
             }),
           ),
@@ -2507,6 +2512,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   stderr: "",
                   code: 0,
                 };
+              if (joined === "--t3-usage-limits-json") return { stdout: "", stderr: "", code: 1 };
               throw new Error(`Unexpected args: ${joined}`);
             }),
           ),
@@ -2524,6 +2530,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               stderr: "",
               code: 0,
             };
+          if (joined === "--t3-usage-limits-json") return { stdout: "", stderr: "", code: 1 };
           throw new Error(`Unexpected args: ${joined}`);
         });
 
@@ -2536,9 +2543,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             claudeCapabilities(),
           );
           assert.strictEqual(status.status, "ready");
+          // --version plus the wrapper usage probe both run with the configured home.
           assert.deepStrictEqual(
             recorded.commands.map((command) => command.env?.CLAUDE_CONFIG_DIR),
-            [claudeConfigDir],
+            [claudeConfigDir, claudeConfigDir],
           );
         }).pipe(Effect.provide(recorded.layer));
       });
@@ -2577,6 +2585,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   stderr: "",
                   code: 0,
                 };
+              if (joined === "--t3-usage-limits-json") return { stdout: "", stderr: "", code: 1 };
               throw new Error(`Unexpected args: ${joined}`);
             }),
           ),
@@ -2621,6 +2630,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   stderr: "",
                   code: 0,
                 };
+              if (joined === "--t3-usage-limits-json") return { stdout: "", stderr: "", code: 1 };
               throw new Error(`Unexpected args: ${joined}`);
             }),
           ),
@@ -2648,6 +2658,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   stderr: "",
                   code: 0,
                 };
+              if (joined === "--t3-usage-limits-json") return { stdout: "", stderr: "", code: 1 };
               throw new Error(`Unexpected args: ${joined}`);
             }),
           ),
@@ -2704,6 +2715,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             mockSpawnerLayer((args) => {
               if (args.join(" ") === "--version") {
                 return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              }
+              if (args.join(" ") === "--t3-usage-limits-json") {
+                return { stdout: "", stderr: "", code: 1 };
               }
               throw new Error(`Unexpected args: ${args.join(" ")}`);
             }),
