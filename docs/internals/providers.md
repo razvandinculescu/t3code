@@ -290,6 +290,17 @@ probes, respect the `enableProviderUpdateChecks` setting, and never fail a provi
 Codex and Claude drivers apply the classification to every snapshot with `applyModelManifest`;
 driver kinds absent from the manifest have no legacy concept.
 
+Claude model capabilities come from the same manifest's `providers.claudeAgent` catalog.
+`scopeClaudeModelCatalog` (`apps/server/src/provider/ClaudeModelCatalog.ts`) scopes that catalog
+per instance: it strips built-in aliases that collide with a custom model and appends the
+instance's `customModels`. Bare slug entries carry no capabilities; `{ slug, capabilities }`
+object entries declare the option descriptors the composer renders (effort select, thinking
+toggle) and that the adapter forwards to the Claude SDK. Appended entries get an empty runtime
+apart from a guardrail `effortMap` (`ultracode` → `xhigh`, `ultrathink` → `null`), so no built-in
+suffixes, context windows, or version gating leak onto custom models. The snapshot path resolves
+the same entries through `providerModelsFromSettings`, so the traits UI and the adapter always
+agree.
+
 ## Attachment access
 
 The server stores uploaded attachments in its attachment directory, outside the project workspace.

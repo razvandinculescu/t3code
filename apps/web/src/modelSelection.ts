@@ -11,6 +11,7 @@ import {
 } from "@t3tools/contracts";
 import {
   createModelSelection,
+  normalizeCustomModelEntry,
   normalizeCustomModelSlug,
   resolveSelectableModel,
 } from "@t3tools/shared/model";
@@ -62,7 +63,12 @@ function readInstanceCustomModels(
   if (config !== null && typeof config === "object") {
     const value = (config as Record<string, unknown>).customModels;
     if (Array.isArray(value)) {
-      return value.filter((entry): entry is string => typeof entry === "string");
+      // Entries may be bare slugs or `{ slug, capabilities? }` objects; the
+      // selectable list only cares about slugs.
+      return value.flatMap((entry) => {
+        const slug = normalizeCustomModelEntry(entry)?.slug;
+        return slug ? [slug] : [];
+      });
     }
   }
   const defaultInstanceId = defaultInstanceIdForDriver(driverKind);

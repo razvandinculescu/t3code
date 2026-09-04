@@ -50,6 +50,65 @@ describe("ClaudeSettings auto-compaction", () => {
   });
 });
 
+describe("ClaudeSettings customModels", () => {
+  it("decodes bare slugs and object entries with inline capabilities", () => {
+    const settings = decodeClaudeSettings({
+      customModels: [
+        "k3-256k",
+        {
+          slug: "k3",
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "effort",
+                label: "Reasoning",
+                type: "select",
+                options: [{ id: "high", label: "High", isDefault: true }],
+                promptInjectedValues: ["ultrathink"],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(settings.customModels).toEqual([
+      "k3-256k",
+      {
+        slug: "k3",
+        capabilities: {
+          optionDescriptors: [
+            {
+              id: "effort",
+              label: "Reasoning",
+              type: "select",
+              options: [{ id: "high", label: "High", isDefault: true }],
+              promptInjectedValues: ["ultrathink"],
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("rejects object entries without a usable slug or with malformed capabilities", () => {
+    expect(() => decodeClaudeSettings({ customModels: [{ slug: " " }] })).toThrow();
+    expect(() =>
+      decodeClaudeSettings({
+        customModels: [{ slug: "k3", capabilities: { optionDescriptors: [42] } }],
+      }),
+    ).toThrow();
+  });
+
+  it("accepts object entries at the settings patch boundary", () => {
+    expect(
+      decodeServerSettingsPatch({
+        providers: { claudeAgent: { customModels: [{ slug: "k3" }, "k3-256k"] } },
+      }),
+    ).toBeDefined();
+  });
+});
+
 describe("ClientSettings word wrap", () => {
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);

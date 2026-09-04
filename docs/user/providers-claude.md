@@ -234,3 +234,51 @@ If the preset needs different Claude files, give it a different `CLAUDE_CONFIG_D
 different API keys, base URLs, or router settings, use Environment variables.
 
 Do not put environment variable assignments in `Launch arguments`.
+
+## I Want Effort Controls For A Custom Model
+
+Custom models you add in Settings (for example a model served by a router or a Claude-compatible
+relay) come with no reasoning controls: the composer shows no **Reasoning** picker for them, and
+T3 Code sends no effort or thinking setting to Claude Code, so the session runs with whatever the
+harness decides on its own.
+
+To get the same controls built-in models have, give the model inline capabilities in
+`settings.json` (in your T3 Code data directory, `~/.t3/userdata` by default). Find the provider in
+`providerInstances` and turn its entry in `customModels` into an object:
+
+```json
+"customModels": [
+  {
+    "slug": "k3",
+    "capabilities": {
+      "optionDescriptors": [
+        {
+          "id": "effort",
+          "label": "Reasoning",
+          "type": "select",
+          "options": [
+            { "id": "low", "label": "Low" },
+            { "id": "medium", "label": "Medium" },
+            { "id": "high", "label": "High", "isDefault": true },
+            { "id": "ultrathink", "label": "Ultrathink" }
+          ],
+          "promptInjectedValues": ["ultrathink"]
+        }
+      ]
+    }
+  },
+  "k3-256k"
+]
+```
+
+- An `effort` descriptor with `type: "select"` adds the **Reasoning** picker. The option marked
+  `isDefault` is what T3 Code sends when you have not chosen anything, so the effective effort is
+  always visible instead of implicit. Values in `promptInjectedValues` (like `ultrathink`) become
+  prompt prefixes instead of an API effort. Effort values are passed to Claude Code as-is; what a
+  non-Anthropic backend does with them is up to that backend.
+- `{ "id": "thinking", "label": "Thinking", "type": "boolean" }` adds an on/off **Thinking**
+  toggle (Claude Code's `alwaysThinkingEnabled`).
+- Bare string entries keep the old behavior: no picker, nothing sent.
+
+Adding or removing models from Settings keeps the object entries intact. Restart T3 Code after
+editing `settings.json`.

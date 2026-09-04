@@ -14,7 +14,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { normalizeCustomModelSlug } from "@t3tools/shared/model";
+import { normalizeCustomModelEntry } from "@t3tools/shared/model";
 import { isWindowsCommandNotFound } from "../processRunner.ts";
 import { createProviderVersionAdvisory } from "./providerMaintenance.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
@@ -147,7 +147,9 @@ export function parseGenericCliVersion(output: string): string | null {
 
 export function providerModelsFromSettings(
   builtInModels: ReadonlyArray<ServerProviderModel>,
-  customModels: ReadonlyArray<string>,
+  customModels: ReadonlyArray<
+    string | { readonly slug?: unknown; readonly capabilities?: ModelCapabilities | undefined }
+  >,
   customModelCapabilities: ModelCapabilities,
 ): ReadonlyArray<ServerProviderModel> {
   const resolvedBuiltInModels = [...builtInModels];
@@ -155,16 +157,16 @@ export function providerModelsFromSettings(
   const customEntries: ServerProviderModel[] = [];
 
   for (const candidate of customModels) {
-    const normalized = normalizeCustomModelSlug(candidate);
-    if (!normalized || seen.has(normalized)) {
+    const entry = normalizeCustomModelEntry(candidate);
+    if (!entry || seen.has(entry.slug)) {
       continue;
     }
-    seen.add(normalized);
+    seen.add(entry.slug);
     customEntries.push({
-      slug: normalized,
-      name: normalized,
+      slug: entry.slug,
+      name: entry.slug,
       isCustom: true,
-      capabilities: customModelCapabilities,
+      capabilities: entry.capabilities ?? customModelCapabilities,
     });
   }
 

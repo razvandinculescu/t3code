@@ -247,6 +247,42 @@ export function normalizeCustomModelSlug(model: string | null | undefined): stri
   return model.trim() || null;
 }
 
+export interface NormalizedCustomModelEntry {
+  readonly slug: string;
+  readonly capabilities?: ModelCapabilities;
+}
+
+/**
+ * Custom model entries are either bare slugs or `{ slug, capabilities? }`
+ * objects (`ClaudeCustomModelEntry` in contracts). Normalizes both to a slug
+ * plus whatever capabilities the entry declared. Returns null for entries
+ * without a usable slug so callers reading opaque config blobs can map
+ * straight over the raw array.
+ */
+export function normalizeCustomModelEntry(
+  entry:
+    | string
+    | { readonly slug?: unknown; readonly capabilities?: ModelCapabilities | undefined }
+    | null
+    | undefined,
+): NormalizedCustomModelEntry | null {
+  if (typeof entry === "string") {
+    const slug = normalizeCustomModelSlug(entry);
+    return slug ? { slug } : null;
+  }
+  if (entry === null || entry === undefined || typeof entry !== "object") {
+    return null;
+  }
+  const slug = normalizeCustomModelSlug(typeof entry.slug === "string" ? entry.slug : null);
+  if (!slug) {
+    return null;
+  }
+  return {
+    slug,
+    ...(entry.capabilities !== undefined ? { capabilities: entry.capabilities } : {}),
+  };
+}
+
 export function resolveSelectableModel(
   provider: ProviderDriverKind,
   value: string | null | undefined,

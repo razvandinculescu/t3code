@@ -24,6 +24,7 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+import { normalizeCustomModelEntry } from "@t3tools/shared/model";
 
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -96,16 +97,34 @@ function providerEnvironmentsEqual(
 }
 
 /**
- * Read a string[] at `key` from the opaque config blob, filtering out
- * non-string entries. Used for `customModels`, which is always typed as
- * `string[]` by the concrete driver schemas but arrives here as
- * `Schema.Unknown`.
+ * Reconcile a Models-section slug list back to config entries: kept slugs
+ * preserve their raw entry (so `{ slug, capabilities }` objects survive
+ * add/remove from the UI), newly added slugs land as bare strings.
  */
-function readConfigStringArray(config: unknown, key: string): ReadonlyArray<string> {
+export function reconcileCustomModelEntries(
+  current: ReadonlyArray<{ readonly slug: string; readonly raw: unknown }>,
+  nextSlugs: ReadonlyArray<string>,
+): Array<unknown> {
+  const rawBySlug = new Map(current.map((entry) => [entry.slug, entry.raw]));
+  return nextSlugs.map((slug) => rawBySlug.get(slug) ?? slug);
+}
+
+/**
+ * Read `customModels` from the opaque config blob as slug + raw entry pairs.
+ * Entries are bare slugs or `{ slug, capabilities? }` objects; the section
+ * dedupes/adds/removes by slug, and writes reconcile back to the raw entries
+ * so object entries (with their capabilities) survive UI edits.
+ */
+function readConfigCustomModels(
+  config: unknown,
+): ReadonlyArray<{ readonly slug: string; readonly raw: unknown }> {
   if (config === null || typeof config !== "object") return [];
-  const value = (config as Record<string, unknown>)[key];
+  const value = (config as Record<string, unknown>).customModels;
   if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string");
+  return value.flatMap((raw) => {
+    const slug = normalizeCustomModelEntry(raw)?.slug;
+    return slug ? [{ slug, raw }] : [];
+  });
 }
 
 /**
@@ -462,8 +481,9 @@ export function ProviderInstanceCard({
   const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
     ? instance.driver
     : null;
-  const customModels =
-    instance.driver === "antigravity" ? [] : readConfigStringArray(instance.config, "customModels");
+  const customModelEntries =
+    instance.driver === "antigravity" ? [] : readConfigCustomModels(instance.config);
+  const customModels = customModelEntries.map((entry) => entry.slug);
   // Server-returned models may lag behind settings writes. Treat probe
   // models as the source for built-ins only; custom rows come directly
   // from the current instance config so add/remove reflects immediately.
@@ -505,7 +525,11 @@ export function ProviderInstanceCard({
   };
 
   const updateCustomModels = (next: ReadonlyArray<string>) => {
-    const nextConfig = nextConfigBlobWithValue(instance.config, "customModels", [...next]);
+    const nextConfig = nextConfigBlobWithValue(
+      instance.config,
+      "customModels",
+      reconcileCustomModelEntries(customModelEntries, next),
+    );
     const { config: _omit, ...rest } = instance;
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
   };

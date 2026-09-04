@@ -70,6 +70,30 @@ describe("providerModelsFromSettings", () => {
     expect(models.map((model) => model.slug)).toEqual(["claude-opus-4-8", "opus"]);
     expect(models[1]?.isCustom).toBe(true);
   });
+
+  it("uses per-entry capabilities for object entries and the default for bare slugs", () => {
+    const fallback = createModelCapabilities({ optionDescriptors: [] });
+    const declared = createModelCapabilities({
+      optionDescriptors: [
+        {
+          id: "effort",
+          label: "Reasoning",
+          type: "select",
+          options: [{ id: "high", label: "High", isDefault: true }],
+        },
+      ],
+    });
+    const models = providerModelsFromSettings(
+      [],
+      [{ slug: "k3", capabilities: declared }, "qwen-local"],
+      fallback,
+    );
+
+    expect(models).toEqual([
+      { slug: "k3", name: "k3", isCustom: true, capabilities: declared },
+      { slug: "qwen-local", name: "qwen-local", isCustom: true, capabilities: fallback },
+    ]);
+  });
 });
 
 describe("ProviderCommandNotFoundError", () => {

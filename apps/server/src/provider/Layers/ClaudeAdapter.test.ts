@@ -528,6 +528,76 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("forwards declared custom-model capabilities into query options", () => {
+    const harness = makeHarness({
+      claudeConfig: {
+        customModels: [
+          {
+            slug: "k3-synthetic",
+            capabilities: {
+              optionDescriptors: [
+                {
+                  id: "effort",
+                  label: "Reasoning",
+                  type: "select",
+                  options: [
+                    { id: "low", label: "Low" },
+                    { id: "high", label: "High", isDefault: true },
+                  ],
+                },
+                { id: "thinking", label: "Thinking", type: "boolean" },
+              ],
+            },
+          },
+          "plain-synthetic",
+        ],
+      },
+    });
+    const start = (
+      threadId: ThreadId,
+      model: string,
+      options: ReadonlyArray<{ id: string; value: string | boolean }>,
+    ) =>
+      Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("claudeAgent"),
+            model,
+            options,
+          ),
+          runtimeMode: "full-access",
+        });
+        return harness.getLastCreateQueryInput()?.options;
+      });
+
+    return Effect.gen(function* () {
+      const capableOptions = yield* start(THREAD_ID, "k3-synthetic", [
+        { id: "effort", value: "low" },
+        { id: "thinking", value: true },
+      ]);
+      assert.equal(capableOptions?.model, "k3-synthetic");
+      assert.equal(capableOptions?.effort, "low");
+      assert.deepEqual(capableOptions?.settings, { alwaysThinkingEnabled: true });
+
+      // The declared default applies when nothing is selected.
+      const defaultOptions = yield* start(ThreadId.make("thread-claude-2"), "k3-synthetic", []);
+      assert.equal(defaultOptions?.effort, "high");
+
+      // Bare string entries stay capability-less, as before.
+      const plainOptions = yield* start(ThreadId.make("thread-claude-3"), "plain-synthetic", [
+        { id: "effort", value: "low" },
+      ]);
+      assert.equal(plainOptions?.effort, undefined);
+      assert.equal(plainOptions?.settings, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("requests summarized thinking display for Mythos-class models", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

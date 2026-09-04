@@ -12,6 +12,7 @@ import {
   getProviderOptionDescriptors,
   getProviderOptionBooleanSelectionValue,
   getProviderOptionStringSelectionValue,
+  normalizeCustomModelEntry,
 } from "./model.ts";
 
 const codexCaps: ModelCapabilities = createModelCapabilities({
@@ -59,6 +60,40 @@ const claudeCaps: ModelCapabilities = createModelCapabilities({
       currentValue: "1m",
     },
   ],
+});
+
+describe("normalizeCustomModelEntry", () => {
+  it("normalizes bare slugs and never expands aliases", () => {
+    expect(normalizeCustomModelEntry(" opus ")).toEqual({ slug: "opus" });
+    expect(normalizeCustomModelEntry("  ")).toBeNull();
+    expect(normalizeCustomModelEntry("")).toBeNull();
+  });
+
+  it("passes object entries through with their capabilities", () => {
+    const capabilities = createModelCapabilities({
+      optionDescriptors: [
+        {
+          id: "effort",
+          label: "Reasoning",
+          type: "select",
+          options: [{ id: "high", label: "High", isDefault: true }],
+        },
+      ],
+    });
+    expect(normalizeCustomModelEntry({ slug: " k3 ", capabilities })).toEqual({
+      slug: "k3",
+      capabilities,
+    });
+    expect(normalizeCustomModelEntry({ slug: "k3" })).toEqual({ slug: "k3" });
+  });
+
+  it("rejects entries without a usable slug", () => {
+    expect(normalizeCustomModelEntry(null)).toBeNull();
+    expect(normalizeCustomModelEntry(undefined)).toBeNull();
+    expect(normalizeCustomModelEntry(42 as unknown as string)).toBeNull();
+    expect(normalizeCustomModelEntry({ capabilities: {} })).toBeNull();
+    expect(normalizeCustomModelEntry({ slug: 42 })).toBeNull();
+  });
 });
 
 describe("descriptor helpers", () => {

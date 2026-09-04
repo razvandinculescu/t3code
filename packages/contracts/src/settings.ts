@@ -8,6 +8,7 @@ import { EnvironmentMachineKind, ThreadEnvMode } from "./environment.ts";
 import {
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
+  ModelCapabilities,
   ProviderOptionSelections,
 } from "./model.ts";
 import { ModelSelection } from "./orchestration.ts";
@@ -488,6 +489,21 @@ export type CodexSettings = typeof CodexSettings.Type;
 // the update that introduced it.
 const CLAUDE_AUTO_COMPACT_WINDOW_PATTERN = /^(?:|[1-9]\d{5}|1000000)$/;
 
+/**
+ * A custom Claude model with optional inline capabilities. Bare string entries
+ * in `customModels` keep the historical behavior (no option descriptors, no
+ * traits UI); the object form declares what the composer shows and what the
+ * adapter passes to the Claude SDK (effort, thinking toggle, ...).
+ */
+export const ClaudeCustomModel = Schema.Struct({
+  slug: TrimmedNonEmptyString,
+  capabilities: Schema.optionalKey(ModelCapabilities),
+});
+export type ClaudeCustomModel = typeof ClaudeCustomModel.Type;
+
+export const ClaudeCustomModelEntry = Schema.Union([Schema.String, ClaudeCustomModel]);
+export type ClaudeCustomModelEntry = typeof ClaudeCustomModelEntry.Type;
+
 export const ClaudeSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
@@ -510,7 +526,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         providerSettingsForm: { placeholder: "~/.claude", clearWhenEmpty: "omit" },
       }),
     ),
-    customModels: Schema.Array(Schema.String).pipe(
+    customModels: Schema.Array(ClaudeCustomModelEntry).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
@@ -1054,7 +1070,7 @@ const ClaudeSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
   homePath: Schema.optionalKey(TrimmedString),
-  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+  customModels: Schema.optionalKey(Schema.Array(ClaudeCustomModelEntry)),
   launchArgs: Schema.optionalKey(TrimmedString),
   // Validated at the patch boundary so a typo fails the one update with a
   // schema error instead of a generic whole-settings failure.

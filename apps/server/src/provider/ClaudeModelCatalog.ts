@@ -1,4 +1,5 @@
 import {
+  type ClaudeCustomModelEntry,
   type ModelCapabilities,
   type ModelSelection,
   ProviderDriverKind,
@@ -9,7 +10,7 @@ import {
   getModelSelectionStringOptionValue,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
-  normalizeCustomModelSlug,
+  normalizeCustomModelEntry,
 } from "@t3tools/shared/model";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 
@@ -70,32 +71,68 @@ export function resolveClaudeModelCatalog(manifest: ModelManifestData): ClaudeMo
 
 export const BUNDLED_CLAUDE_MODEL_CATALOG = resolveClaudeModelCatalog(BUNDLED_MODEL_MANIFEST);
 
-/** Keeps custom model aliases opaque while preserving canonical built-in models and capabilities. */
+/**
+ * Guardrail effort map for custom entries. Built-in profiles carry their own
+ * `effortMap`; without one, a stale `ultracode`/`ultrathink` selection on a
+ * custom model would reach the SDK as a raw effort value. Mirrors the
+ * built-in semantics: ultracode runs at xhigh, ultrathink is prompt-injected
+ * and never an API effort.
+ */
+const CUSTOM_MODEL_EFFORT_MAP: Record<string, string | null> = {
+  ultracode: "xhigh",
+  ultrathink: null,
+};
+
+/**
+ * Keeps custom model aliases opaque while preserving canonical built-in models
+ * and capabilities. Custom entries are appended to the catalog with the
+ * capabilities they declared (if any), so the adapter and text generation
+ * resolve effort/thinking for them through the same catalog paths as
+ * built-ins. Their runtime stays empty apart from `CUSTOM_MODEL_EFFORT_MAP`,
+ * so no built-in suffixes, context windows, or version gating leak onto them.
+ */
 export function scopeClaudeModelCatalog(
   catalog: ClaudeModelCatalog,
-  customModels: ReadonlyArray<string>,
+  customModels: ReadonlyArray<ClaudeCustomModelEntry>,
 ): ClaudeModelCatalog {
-  const customAliases = new Set(
-    customModels.flatMap((model) => {
-      const slug = normalizeCustomModelSlug(model);
-      return slug ? [slug.toLowerCase()] : [];
-    }),
-  );
-  if (customAliases.size === 0) return catalog;
+  const appended: Array<ClaudeCatalogModel> = [];
+  const customSlugs = new Set<string>();
+  for (const candidate of customModels) {
+    const entry = normalizeCustomModelEntry(candidate);
+    if (!entry) continue;
+    const slugKey = entry.slug.toLowerCase();
+    if (customSlugs.has(slugKey)) continue;
+    customSlugs.add(slugKey);
+    if (catalog.models.some((existing) => existing.model.slug === entry.slug)) continue;
+    appended.push({
+      model: {
+        slug: entry.slug,
+        name: entry.slug,
+        isCustom: true,
+        capabilities: entry.capabilities ?? null,
+      },
+      runtime: { effortMap: { ...CUSTOM_MODEL_EFFORT_MAP } },
+      compatibility: {},
+    });
+  }
+  if (customSlugs.size === 0) return catalog;
 
   return {
-    models: catalog.models.map((entry) => {
-      if (!entry.model.aliases?.some((alias) => customAliases.has(alias.toLowerCase()))) {
-        return entry;
-      }
-      return {
-        ...entry,
-        model: {
-          ...entry.model,
-          aliases: entry.model.aliases.filter((alias) => !customAliases.has(alias.toLowerCase())),
-        },
-      };
-    }),
+    models: [
+      ...catalog.models.map((entry) => {
+        if (!entry.model.aliases?.some((alias) => customSlugs.has(alias.toLowerCase()))) {
+          return entry;
+        }
+        return {
+          ...entry,
+          model: {
+            ...entry.model,
+            aliases: entry.model.aliases.filter((alias) => !customSlugs.has(alias.toLowerCase())),
+          },
+        };
+      }),
+      ...appended,
+    ],
   };
 }
 

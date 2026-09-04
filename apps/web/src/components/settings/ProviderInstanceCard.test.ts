@@ -8,7 +8,38 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 
-import { deriveProviderModelsForDisplay, ProviderInstanceCard } from "./ProviderInstanceCard";
+import {
+  deriveProviderModelsForDisplay,
+  ProviderInstanceCard,
+  reconcileCustomModelEntries,
+} from "./ProviderInstanceCard";
+
+describe("reconcileCustomModelEntries", () => {
+  it("preserves object entries on kept slugs and adds new slugs as bare strings", () => {
+    const capable = {
+      slug: "k3",
+      capabilities: {
+        optionDescriptors: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            type: "select",
+            options: [{ id: "high", label: "High", isDefault: true }],
+          },
+        ],
+      },
+    };
+    const current = [
+      { slug: "k3", raw: capable },
+      { slug: "removed", raw: "removed" },
+    ];
+
+    expect(reconcileCustomModelEntries(current, ["k3", "qwen-local"])).toEqual([
+      capable,
+      "qwen-local",
+    ]);
+  });
+});
 
 describe("deriveProviderModelsForDisplay", () => {
   it("uses current config custom models instead of stale live custom rows", () => {

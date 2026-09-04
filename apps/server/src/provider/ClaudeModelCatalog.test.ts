@@ -7,9 +7,11 @@ import {
   formatClaudeVersionUpgradeMessage,
   normalizeClaudeCatalogEffort,
   resolveClaudeCatalogApiModelId,
+  resolveClaudeCatalogEffort,
   resolveClaudeModelCatalog,
   resolveClaudeModelsForVersion,
   resolveClaudeModelSlug,
+  scopeClaudeModelCatalog,
 } from "./ClaudeModelCatalog.ts";
 
 /**
@@ -133,5 +135,75 @@ describe("Claude model catalog", () => {
       },
     };
     assert.isFalse(hasValidClaudeManifestAdapters(malformed));
+  });
+});
+
+describe("scopeClaudeModelCatalog", () => {
+  const CUSTOM_CAPABILITIES = {
+    optionDescriptors: [
+      {
+        id: "effort",
+        label: "Reasoning",
+        type: "select" as const,
+        options: [
+          { id: "low", label: "Low" },
+          { id: "high", label: "High", isDefault: true },
+          { id: "ultracode", label: "Ultracode" },
+          { id: "ultrathink", label: "Ultrathink" },
+        ],
+        promptInjectedValues: ["ultrathink"],
+      },
+    ],
+  };
+
+  it("appends object entries whose capabilities resolve like built-in ones", () => {
+    const catalog = scopeClaudeModelCatalog(resolveClaudeModelCatalog(manifest()), [
+      { slug: "k3-synthetic", capabilities: CUSTOM_CAPABILITIES },
+      "plain-synthetic",
+    ]);
+
+    // The declared descriptor drives effort resolution, including its default.
+    assert.strictEqual(resolveClaudeCatalogEffort(catalog, "k3-synthetic", undefined), "high");
+    assert.strictEqual(resolveClaudeCatalogEffort(catalog, "k3-synthetic", "low"), "low");
+    // The guardrail effort map keeps harness keywords off the API effort slot.
+    assert.strictEqual(normalizeClaudeCatalogEffort(catalog, "ultracode", "k3-synthetic"), "xhigh");
+    assert.strictEqual(
+      normalizeClaudeCatalogEffort(catalog, "ultrathink", "k3-synthetic"),
+      undefined,
+    );
+    // No built-in suffixes or context windows leak onto the custom model.
+    assert.strictEqual(
+      resolveClaudeCatalogApiModelId(catalog, {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "k3-synthetic",
+      }),
+      "k3-synthetic",
+    );
+
+    // Bare string entries join the catalog but stay capability-less.
+    const plain = catalog.models.find((entry) => entry.model.slug === "plain-synthetic");
+    assert.strictEqual(plain?.model.isCustom, true);
+    assert.strictEqual(resolveClaudeCatalogEffort(catalog, "plain-synthetic", "low"), undefined);
+  });
+
+  it("keeps a custom slug that collides with a built-in alias opaque", () => {
+    const catalog = scopeClaudeModelCatalog(resolveClaudeModelCatalog(manifest()), [
+      { slug: "synthetic", capabilities: CUSTOM_CAPABILITIES },
+    ]);
+    assert.strictEqual(resolveClaudeModelSlug(catalog, "synthetic"), "synthetic");
+    assert.strictEqual(resolveClaudeCatalogEffort(catalog, "synthetic", undefined), "high");
+  });
+
+  it("does not shadow a built-in model with the same slug", () => {
+    const catalog = scopeClaudeModelCatalog(resolveClaudeModelCatalog(manifest()), [
+      { slug: "claude-synthetic-next", capabilities: CUSTOM_CAPABILITIES },
+    ]);
+    const entries = catalog.models.filter((entry) => entry.model.slug === "claude-synthetic-next");
+    assert.strictEqual(entries.length, 1);
+    assert.strictEqual(entries[0]?.model.isCustom, false);
+    assert.strictEqual(
+      normalizeClaudeCatalogEffort(catalog, "extreme", "claude-synthetic-next"),
+      "high",
+    );
   });
 });

@@ -111,6 +111,46 @@ describe("instance-scoped model selection", () => {
     ).toContain("openai/gpt-5.5");
   });
 
+  it("lists object-form custom entries by slug", () => {
+    const providers = [
+      provider({
+        instanceId: "claudeAgent",
+        models: ["claude-sonnet-4-6"],
+      }),
+    ];
+    const settings: UnifiedSettings = {
+      ...settingsWithProviderInstances(),
+      providerInstances: {
+        ...settingsWithProviderInstances().providerInstances,
+        [ProviderInstanceId.make("claudeAgent")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          config: {
+            customModels: [
+              {
+                slug: "k3",
+                capabilities: {
+                  optionDescriptors: [
+                    {
+                      id: "effort",
+                      label: "Reasoning",
+                      type: "select",
+                      options: [{ id: "high", label: "High", isDefault: true }],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const stock = deriveProviderInstanceEntries(providers)[0]!;
+
+    expect(getAppModelOptionsForInstance(settings, stock).map((option) => option.slug)).toContain(
+      "k3",
+    );
+  });
+
   it("resolves a custom slug against the selected custom instance", () => {
     const providers = [
       provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claudeAgent" }),
