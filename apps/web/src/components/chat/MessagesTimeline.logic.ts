@@ -90,15 +90,6 @@ export function liveWorkEntryLabel(
   return workEntryDisplayLabel(entry, workspaceRoot);
 }
 
-/**
- * Rows that preview an image the agent viewed or produced. They stay out of
- * tool groups and out of the settled-turn fold: the image is the answer the
- * user asked for, not tool noise to hide behind "Worked for ...".
- */
-function workEntryRendersImagePreview(entry: WorkLogEntry): boolean {
-  return workEntryViewedImagePath(entry) !== null;
-}
-
 export function workEntryIsVisibleInGroup(
   entry: WorkLogEntry,
   expandedToolGroupEntry = false,
@@ -107,9 +98,6 @@ export function workEntryIsVisibleInGroup(
     (expandedToolGroupEntry &&
       (entry.toolLifecycleStatus === "inProgress" ||
         entry.sourceActivityKind === "task.progress")) ||
-    // An image row stands alone outside any group, so the neutral filter
-    // would leave an empty gap while its tool is still in progress.
-    workEntryRendersImagePreview(entry) ||
     !workEntryIndicatesToolNeutralStatus(entry)
   );
 }
@@ -655,9 +643,6 @@ function deriveTurnFolds(input: {
       ) {
         continue;
       }
-      if (entry.kind === "work" && workEntryRendersImagePreview(entry.entry)) {
-        continue;
-      }
       hiddenEntryIds.add(entry.id);
     }
     if (hiddenEntryIds.size === 0) {
@@ -859,8 +844,7 @@ export function deriveMessagesTimelineRows(input: {
       entry.kind !== "work" ||
       entry.entry.agentSpawn !== undefined ||
       entry.entry.sourceActivityKind === "context-compaction" ||
-      entry.entry.tone === "error" ||
-      workEntryRendersImagePreview(entry.entry)
+      entry.entry.tone === "error"
     ) {
       break;
     }
@@ -992,11 +976,7 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     if (timelineEntry.kind === "work") {
-      if (
-        timelineEntry.entry.agentSpawn !== undefined ||
-        timelineEntry.entry.tone === "error" ||
-        workEntryRendersImagePreview(timelineEntry.entry)
-      ) {
+      if (timelineEntry.entry.agentSpawn !== undefined || timelineEntry.entry.tone === "error") {
         nextRows.push({
           kind: "work",
           id: timelineEntry.id,
@@ -1016,7 +996,6 @@ export function deriveMessagesTimelineRows(input: {
           nextEntry.entry.agentSpawn !== undefined ||
           nextEntry.entry.sourceActivityKind === "context-compaction" ||
           nextEntry.entry.tone === "error" ||
-          workEntryRendersImagePreview(nextEntry.entry) ||
           activeWorkEntryIds.has(nextEntry.id) ||
           collapsedEntryIds.has(nextEntry.id) ||
           foldsByAnchorEntryId.has(nextEntry.id)
@@ -1349,11 +1328,11 @@ function workEntryRendersBody(entry: WorkLogEntry, options: TimelineRowSizeOptio
 
 function workEntryTextLength(entry: WorkLogEntry, options: TimelineRowSizeOptions): number {
   let length = entry.label.length;
-  if (workEntryRendersImagePreview(entry)) {
-    length += TIMELINE_IMAGE_PREVIEW_CHARS;
-  }
   if (!workEntryRendersBody(entry, options)) {
     return length;
+  }
+  if (workEntryViewedImagePath(entry) !== null) {
+    length += TIMELINE_IMAGE_PREVIEW_CHARS;
   }
   length += entry.detail?.length ?? 0;
   length += (entry.rawCommand ?? entry.command)?.length ?? 0;

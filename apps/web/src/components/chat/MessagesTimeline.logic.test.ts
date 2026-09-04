@@ -14,7 +14,6 @@ import {
   shouldPreserveAssistantLineBreaks,
   type MessagesTimelineRow,
   workEntryDisplayLabel,
-  workEntryIsVisibleInGroup,
 } from "./MessagesTimeline.logic";
 
 describe("expanded tool group scrolling", () => {
@@ -471,22 +470,6 @@ describe("resolveAssistantMessageCopyState", () => {
       text: "Created [report.xlsx](<outputs/report.xlsx>).\n\nHello World (Document template)",
       visible: true,
     });
-  });
-});
-
-describe("workEntryIsVisibleInGroup", () => {
-  it("keeps an in-progress image preview row visible outside a group", () => {
-    const entry = {
-      id: "work-image",
-      createdAt: "2026-01-01T00:00:04Z",
-      turnId: "turn-1" as never,
-      label: "Image view",
-      detail: "screenshots/result.png",
-      itemType: "image_view" as const,
-      tone: "tool" as const,
-      toolLifecycleStatus: "inProgress" as const,
-    };
-    expect(workEntryIsVisibleInGroup(entry, false)).toBe(true);
   });
 });
 
@@ -962,125 +945,6 @@ describe("deriveMessagesTimelineRows", () => {
       showAssistantMeta: false,
       showAssistantCopyButton: false,
     });
-  });
-
-  it("keeps an image preview row visible after the turn settles", () => {
-    const timelineEntries = [
-      {
-        id: "work-command-entry",
-        kind: "work" as const,
-        createdAt: "2026-01-01T00:00:02Z",
-        entry: {
-          id: "work-command",
-          createdAt: "2026-01-01T00:00:02Z",
-          turnId: "turn-1" as never,
-          label: "Ran command",
-          tone: "tool" as const,
-        },
-      },
-      {
-        id: "work-image-entry",
-        kind: "work" as const,
-        createdAt: "2026-01-01T00:00:04Z",
-        entry: {
-          id: "work-image",
-          createdAt: "2026-01-01T00:00:04Z",
-          turnId: "turn-1" as never,
-          label: "Image view",
-          detail: "screenshots/result.png",
-          itemType: "image_view" as const,
-          tone: "tool" as const,
-        },
-      },
-      {
-        id: "assistant-final-entry",
-        kind: "message" as const,
-        createdAt: "2026-01-01T00:00:06Z",
-        message: {
-          id: "assistant-final" as never,
-          role: "assistant" as const,
-          text: "Here is the screenshot.",
-          turnId: "turn-1" as never,
-          createdAt: "2026-01-01T00:00:06Z",
-          updatedAt: "2026-01-01T00:00:07Z",
-          streaming: false,
-        },
-      },
-    ];
-
-    const rows = deriveMessagesTimelineRows({
-      timelineEntries,
-      isWorking: false,
-      activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
-    });
-
-    // The command row folds, the image row stays as its own visible row rather
-    // than collapsing into a tool group summary.
-    expect(rows.map((row) => row.id)).toEqual([
-      "turn-fold:turn-1",
-      "work-image-entry",
-      "assistant-final-entry",
-    ]);
-    expect(rows.find((row) => row.id === "work-image-entry")?.kind).toBe("work");
-  });
-
-  it("keeps a trailing image preview row visible while the turn is still working", () => {
-    const rows = deriveMessagesTimelineRows({
-      timelineEntries: [
-        {
-          id: "user-entry",
-          kind: "message" as const,
-          createdAt: "2026-01-01T00:00:00Z",
-          message: {
-            id: "user-1" as never,
-            role: "user" as const,
-            text: "show me the result",
-            turnId: null,
-            createdAt: "2026-01-01T00:00:00Z",
-            updatedAt: "2026-01-01T00:00:00Z",
-            streaming: false,
-          },
-        },
-        {
-          id: "work-command-entry",
-          kind: "work" as const,
-          createdAt: "2026-01-01T00:00:02Z",
-          entry: {
-            id: "work-command",
-            createdAt: "2026-01-01T00:00:02Z",
-            turnId: "turn-1" as never,
-            label: "Ran command",
-            tone: "tool" as const,
-          },
-        },
-        {
-          id: "work-image-entry",
-          kind: "work" as const,
-          createdAt: "2026-01-01T00:00:04Z",
-          entry: {
-            id: "work-image",
-            createdAt: "2026-01-01T00:00:04Z",
-            turnId: "turn-1" as never,
-            label: "Image view",
-            detail: "screenshots/result.png",
-            itemType: "image_view" as const,
-            tone: "tool" as const,
-          },
-        },
-      ],
-      isWorking: true,
-      activeTurnStartedAt: "2026-01-01T00:00:01Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
-    });
-
-    // The live activity row must not swallow the image: it renders only a
-    // label, which would hide the image until the turn settles.
-    const imageRow = rows.find((row) => row.id === "work-image-entry");
-    expect(imageRow?.kind).toBe("work");
-    expect(rows.some((row) => row.kind === "work-live")).toBe(false);
   });
 
   it("folds all assistant messages before the terminal message", () => {
@@ -2793,7 +2657,9 @@ describe("computeStableMessagesTimelineRows", () => {
 describe("timeline row size buckets", () => {
   const collapsed = { workLogExpandedByDefault: false, reasoningExpandedByDefault: false };
   const expanded = { workLogExpandedByDefault: true, reasoningExpandedByDefault: true };
-  const entry = (overrides: Partial<{ label: string; detail: string; itemType: "reasoning" }>) => ({
+  const entry = (
+    overrides: Partial<{ label: string; detail: string; itemType: "reasoning" | "image_view" }>,
+  ) => ({
     id: "entry",
     createdAt: "2026-09-03T10:00:00.000Z",
     label: "Read file",
@@ -2832,6 +2698,12 @@ describe("timeline row size buckets", () => {
         reasoningExpandedByDefault: true,
       }),
     ).toBe("work:l");
+  });
+
+  it("counts grouped image previews only when the row body is expanded", () => {
+    const row = workRow([entry({ itemType: "image_view", detail: "preview.png" })]);
+    expect(resolveTimelineRowItemType(row, collapsed)).toBe("work:s");
+    expect(resolveTimelineRowItemType(row, expanded)).toBe("work:m");
   });
 
   it("sizes messages by their text and keeps the role in the type", () => {
