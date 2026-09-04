@@ -9,11 +9,74 @@ import * as Schema from "effect/Schema";
 import {
   buildClaudeCapabilitiesProbeQueryOptions,
   cachedClaudeUsageFromJson,
+  checkClaudeProviderStatus,
   CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES,
+  externalClaudeUsageLimitsFromJson,
   probeClaudeCapabilities,
 } from "./ClaudeProvider.ts";
 
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
+
+it("decodes normalized usage supplied by an Anthropic-compatible wrapper", () => {
+  assert.deepEqual(
+    externalClaudeUsageLimitsFromJson(
+      JSON.stringify({
+        version: 1,
+        windows: [
+          {
+            id: "kimi_weekly",
+            kind: "weekly",
+            label: "Weekly",
+            usedPercent: 42.5,
+            resetsAt: "2026-09-05T13:57:49Z",
+            windowDurationMins: 10_080,
+          },
+        ],
+      }),
+      "2026-09-04T12:00:00Z",
+    ),
+    {
+      kind: "limits",
+      limits: {
+        checkedAt: "2026-09-04T12:00:00Z",
+        windows: [
+          {
+            id: "kimi_weekly",
+            kind: "weekly",
+            label: "Weekly",
+            usedPercent: 42.5,
+            resetsAt: "2026-09-05T13:57:49Z",
+            windowDurationMins: 10_080,
+          },
+        ],
+      },
+    },
+  );
+});
+
+it("lets a wrapper hide a duplicate subscription row", () => {
+  assert.deepEqual(
+    externalClaudeUsageLimitsFromJson(
+      JSON.stringify({ version: 1, hidden: true }),
+      "2026-09-04T12:00:00Z",
+    ),
+    { kind: "hidden" },
+  );
+});
+
+it("rejects malformed wrapper usage instead of publishing misleading limits", () => {
+  assert.equal(
+    externalClaudeUsageLimitsFromJson(
+      JSON.stringify({
+        version: 1,
+        windows: [{ id: "bad", kind: "weekly", label: "Weekly", usedPercent: 101 }],
+      }),
+      "2026-09-04T12:00:00Z",
+    ),
+    undefined,
+  );
+  assert.equal(externalClaudeUsageLimitsFromJson("not json", "2026-09-04T12:00:00Z"), undefined);
+});
 
 it("maps Claude's cached usage without reading credentials", () => {
   assert.deepEqual(
@@ -197,6 +260,70 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
         readonly disableAllHooks?: boolean;
       };
       assert.equal(flagSettings.disableAllHooks, true);
+    }).pipe(Effect.scoped),
+  );
+});
+
+it.layer(NodeServices.layer)("external Claude usage probe", (it) => {
+  it.effect("publishes wrapper limits and hides an explicitly aliased account", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-external-usage-probe-" });
+      const executablePath = path.join(tempDir, "fake-provider.mjs");
+      yield* fs.writeFileString(
+        executablePath,
+        [
+          "#!/usr/bin/env node",
+          "const flag = process.argv[2];",
+          'if (flag === "--version") { console.log("2.1.258"); process.exit(0); }',
+          'if (flag === "--t3-usage-limits-json") {',
+          '  console.log(process.env.T3_EXTERNAL_HIDE === "1"',
+          "    ? JSON.stringify({ version: 1, hidden: true })",
+          "    : JSON.stringify({ version: 1, windows: [{",
+          '        id: "vendor_weekly", kind: "weekly", label: "Weekly",',
+          "        usedPercent: 37, windowDurationMins: 10080,",
+          "      }] }));",
+          "  process.exit(0);",
+          "}",
+          "process.exit(2);",
+          "",
+        ].join("\n"),
+      );
+      yield* fs.chmod(executablePath, 0o755);
+
+      const capabilities = {
+        email: undefined,
+        subscriptionType: undefined,
+        tokenSource: "apiKey",
+        apiProvider: undefined,
+        slashCommands: [],
+        usage: { rate_limits_available: false, rate_limits: null },
+      };
+      const settings = decodeClaudeSettings({ binaryPath: executablePath });
+      const withLimits = yield* checkClaudeProviderStatus(
+        settings,
+        () => Effect.succeed(capabilities),
+        process.env,
+        tempDir,
+      );
+      assert.deepEqual(withLimits.usageLimits?.windows, [
+        {
+          id: "vendor_weekly",
+          kind: "weekly",
+          label: "Weekly",
+          usedPercent: 37,
+          windowDurationMins: 10_080,
+        },
+      ]);
+
+      const hidden = yield* checkClaudeProviderStatus(
+        settings,
+        () => Effect.succeed(capabilities),
+        { ...process.env, T3_EXTERNAL_HIDE: "1" },
+        tempDir,
+      );
+      assert.equal(hidden.usageLimits, undefined);
     }).pipe(Effect.scoped),
   );
 });

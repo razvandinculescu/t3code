@@ -1,6 +1,7 @@
 import {
   type ClaudeSettings,
   type ModelCapabilities,
+  ServerProviderUsageWindow,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -36,7 +37,7 @@ import {
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment, resolveClaudeHomePath } from "../Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
-import { makeUnavailableUsageLimits } from "../providerUsageLimits.ts";
+import { makeUnavailableUsageLimits, makeUsageLimits } from "../providerUsageLimits.ts";
 import {
   type ClaudeScopedLimitNames,
   claudeUsageResponseToLimits,
@@ -194,6 +195,45 @@ function apiProviderAuthMetadata(
 // account info. The previous 8s budget expired mid-init, so the probe returned
 // `undefined` and left the provider unverified and unselectable in the picker.
 const CAPABILITIES_PROBE_TIMEOUT_MS = 25_000;
+const EXTERNAL_USAGE_PROBE_TIMEOUT_MS = 10_000;
+const EXTERNAL_USAGE_PROBE_ARG = "--t3-usage-limits-json";
+
+const ExternalUsageLimitsResponse = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(1),
+    windows: Schema.Array(ServerProviderUsageWindow),
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    hidden: Schema.Literal(true),
+  }),
+]);
+const decodeExternalUsageLimitsResponse = Schema.decodeUnknownOption(ExternalUsageLimitsResponse);
+
+export type ExternalClaudeUsageLimits =
+  | { readonly kind: "limits"; readonly limits: ReturnType<typeof makeUsageLimits> }
+  | { readonly kind: "hidden" };
+
+/** Parse the deliberately small stdout contract implemented by provider wrappers. */
+export function externalClaudeUsageLimitsFromJson(
+  raw: string,
+  checkedAt: string,
+): ExternalClaudeUsageLimits | undefined {
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const decoded = decodeExternalUsageLimitsResponse(json);
+  if (Option.isNone(decoded)) return undefined;
+  return "hidden" in decoded.value
+    ? { kind: "hidden" }
+    : {
+        kind: "limits",
+        limits: makeUsageLimits({ checkedAt, windows: decoded.value.windows }),
+      };
+}
 
 /**
  * Keep workspace-scoped command discovery intact while isolating the periodic
@@ -503,6 +543,27 @@ const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
   return yield* spawnAndCollect(claudeSettings.binaryPath, command);
 });
 
+/**
+ * Optional wrapper protocol for Anthropic-compatible subscription providers.
+ * Unknown binaries simply reject the flag and retain the normal unsupported
+ * result; wrappers that own a credential return only normalized quota data.
+ */
+const probeExternalClaudeUsageLimits = Effect.fn("probeExternalClaudeUsageLimits")(function* (
+  claudeSettings: ClaudeSettings,
+  checkedAt: string,
+  environment?: NodeJS.ProcessEnv,
+) {
+  const result = yield* runClaudeCommand(
+    claudeSettings,
+    [EXTERNAL_USAGE_PROBE_ARG],
+    environment,
+  ).pipe(Effect.timeoutOption(EXTERNAL_USAGE_PROBE_TIMEOUT_MS), Effect.result);
+  if (Result.isFailure(result) || Option.isNone(result.success)) return undefined;
+  const command = result.success.value;
+  if (command.code !== 0) return undefined;
+  return externalClaudeUsageLimitsFromJson(command.stdout, checkedAt);
+});
+
 export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(function* (
   claudeSettings: ClaudeSettings,
   resolveCapabilities?: (
@@ -654,21 +715,34 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       ? yield* readCachedClaudeUsage(claudeSettings)
       : undefined;
   const effectiveUsage = cachedUsage ?? capabilities.usage;
-  const usageLimits = !effectiveUsage
-    ? makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" })
-    : scopedLimitNames
-      ? yield* recordClaudeUsageResponse(scopedLimitNames, {
-          response: effectiveUsage,
-          checkedAt,
-          unavailableReason: usageUnavailable.reason,
-          ...(usageUnavailable.message ? { unavailableMessage: usageUnavailable.message } : {}),
-        })
-      : claudeUsageResponseToLimits({
-          response: effectiveUsage,
-          checkedAt,
-          unavailableReason: usageUnavailable.reason,
-          ...(usageUnavailable.message ? { unavailableMessage: usageUnavailable.message } : {}),
-        }).limits;
+  const externalUsage =
+    usageUnavailable.reason === "unsupported"
+      ? yield* probeExternalClaudeUsageLimits(claudeSettings, checkedAt, resolvedEnvironment)
+      : undefined;
+  const usageLimits =
+    externalUsage?.kind === "hidden"
+      ? undefined
+      : externalUsage?.kind === "limits"
+        ? externalUsage.limits
+        : !effectiveUsage
+          ? makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" })
+          : scopedLimitNames
+            ? yield* recordClaudeUsageResponse(scopedLimitNames, {
+                response: effectiveUsage,
+                checkedAt,
+                unavailableReason: usageUnavailable.reason,
+                ...(usageUnavailable.message
+                  ? { unavailableMessage: usageUnavailable.message }
+                  : {}),
+              })
+            : claudeUsageResponseToLimits({
+                response: effectiveUsage,
+                checkedAt,
+                unavailableReason: usageUnavailable.reason,
+                ...(usageUnavailable.message
+                  ? { unavailableMessage: usageUnavailable.message }
+                  : {}),
+              }).limits;
   return buildServerProvider({
     presentation: CLAUDE_PRESENTATION,
     enabled: claudeSettings.enabled,
@@ -686,7 +760,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         ...(authMetadata ? authMetadata : {}),
       },
       ...(versionUpgradeMessage ? { message: versionUpgradeMessage } : {}),
-      usageLimits,
+      ...(usageLimits ? { usageLimits } : {}),
     },
   });
 });
