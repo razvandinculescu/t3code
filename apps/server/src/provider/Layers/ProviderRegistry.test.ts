@@ -14,6 +14,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as CodexErrors from "effect-codex-app-server/errors";
+import type { SDKControlGetUsageResponse } from "@anthropic-ai/claude-agent-sdk";
 import {
   ClaudeSettings,
   CodexSettings,
@@ -139,6 +140,7 @@ type TestClaudeCapabilities = {
   readonly tokenSource: string | undefined;
   readonly apiProvider: string | undefined;
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
+  readonly usage?: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
 };
 
 function claudeCapabilities(overrides: Partial<TestClaudeCapabilities> = {}) {
@@ -2647,6 +2649,63 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   code: 0,
                 };
               throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("treats missing first-party OAuth limits as a temporary probe failure", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            { ...defaultClaudeSettings, homePath: "/tmp/t3-claude-oauth-probe-test" },
+            claudeCapabilities({
+              tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
+              apiProvider: "firstParty",
+              usage: { rate_limits_available: false, rate_limits: null },
+            }),
+          );
+          assert.deepStrictEqual(status.usageLimits, {
+            checkedAt: status.checkedAt,
+            windows: [],
+            unavailable: {
+              reason: "probeFailed",
+              message: "Claude temporarily could not read subscription limits. Retrying later.",
+            },
+          });
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              if (args.join(" ") === "--version") {
+                return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              }
+              throw new Error(`Unexpected args: ${args.join(" ")}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("keeps API-key accounts authoritatively unsupported", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            claudeCapabilities({
+              tokenSource: "ANTHROPIC_AUTH_TOKEN",
+              apiProvider: "firstParty",
+              usage: { rate_limits_available: false, rate_limits: null },
+            }),
+          );
+          assert.deepStrictEqual(status.usageLimits, {
+            checkedAt: status.checkedAt,
+            windows: [],
+            unavailable: { reason: "unsupported" },
+          });
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              if (args.join(" ") === "--version") {
+                return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              }
+              throw new Error(`Unexpected args: ${args.join(" ")}`);
             }),
           ),
         ),

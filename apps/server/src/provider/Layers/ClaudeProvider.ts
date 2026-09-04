@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -33,7 +34,7 @@ import {
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
-import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { makeClaudeEnvironment, resolveClaudeHomePath } from "../Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 import { makeUnavailableUsageLimits } from "../providerUsageLimits.ts";
 import {
@@ -116,6 +117,30 @@ function normalizeClaudeAuthMethod(authMethod: string | undefined): string | und
     return "apiKey";
   }
   return undefined;
+}
+
+function isClaudeFirstPartyOAuth(input: {
+  readonly subscriptionType: string | undefined;
+  readonly tokenSource: string | undefined;
+  readonly apiProvider: string | undefined;
+}): boolean {
+  const tokenSource = input.tokenSource?.toLowerCase().replace(/[\s_-]+/g, "");
+  return (
+    input.apiProvider === "firstParty" &&
+    (input.subscriptionType !== undefined || tokenSource === "claudecodeoauthtoken")
+  );
+}
+
+function claudeUsageUnavailableFallback(input: Parameters<typeof isClaudeFirstPartyOAuth>[0]): {
+  readonly reason: "unsupported" | "probeFailed";
+  readonly message?: string;
+} {
+  return isClaudeFirstPartyOAuth(input)
+    ? {
+        reason: "probeFailed",
+        message: "Claude temporarily could not read subscription limits. Retrying later.",
+      }
+    : { reason: "unsupported" };
 }
 
 function formatClaudeSubscriptionAuthLabel(subscriptionType: string): string {
@@ -241,6 +266,72 @@ type ClaudeCapabilitiesProbe = {
    */
   readonly usage?: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
 };
+
+const CachedClaudeUsageWindow = Schema.Struct({
+  utilization: Schema.NullOr(Schema.Number),
+  resets_at: Schema.NullOr(Schema.String),
+});
+const CachedClaudeUsageLimit = Schema.Struct({
+  kind: Schema.String,
+  percent: Schema.NullOr(Schema.Number),
+  resets_at: Schema.NullOr(Schema.String),
+  scope: Schema.NullOr(
+    Schema.Struct({
+      model: Schema.NullOr(Schema.Struct({ display_name: Schema.String })),
+    }),
+  ),
+});
+const CachedClaudeUsageFile = Schema.fromJsonString(
+  Schema.Struct({
+    cachedUsageUtilization: Schema.Struct({
+      fetchedAtMs: Schema.Number,
+      utilization: Schema.Struct({
+        five_hour: Schema.optionalKey(Schema.NullOr(CachedClaudeUsageWindow)),
+        seven_day: Schema.optionalKey(Schema.NullOr(CachedClaudeUsageWindow)),
+        limits: Schema.optionalKey(Schema.Array(CachedClaudeUsageLimit)),
+      }),
+    }),
+  }),
+);
+const decodeCachedClaudeUsageFile = Schema.decodeUnknownOption(CachedClaudeUsageFile);
+
+export function cachedClaudeUsageFromJson(raw: string): ClaudeCapabilitiesProbe["usage"] {
+  const decoded = decodeCachedClaudeUsageFile(raw);
+  if (Option.isNone(decoded)) return undefined;
+  const cached = decoded.value.cachedUsageUtilization;
+  const { five_hour, seven_day, limits = [] } = cached.utilization;
+  const modelScoped = limits.flatMap((limit) => {
+    const displayName = limit.scope?.model?.display_name;
+    return limit.kind === "weekly_scoped" && displayName && limit.percent !== null
+      ? [{ display_name: displayName, utilization: limit.percent, resets_at: limit.resets_at }]
+      : [];
+  });
+  if (!five_hour && !seven_day && modelScoped.length === 0) return undefined;
+  return {
+    rate_limits_available: true,
+    rate_limits: {
+      ...(five_hour ? { five_hour } : {}),
+      ...(seven_day ? { seven_day } : {}),
+      ...(modelScoped.length > 0 ? { model_scoped: modelScoped } : {}),
+    },
+  } as ClaudeCapabilitiesProbe["usage"];
+}
+
+const readCachedClaudeUsage = Effect.fn("readCachedClaudeUsage")(function* (
+  claudeSettings: ClaudeSettings,
+): Effect.fn.Return<ClaudeCapabilitiesProbe["usage"], never, FileSystem.FileSystem | Path.Path> {
+  // Custom CLAUDE_CONFIG_DIR layouts are not guaranteed to use ~/.claude.json.
+  if (claudeSettings.homePath.trim().length > 0) return undefined;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const home = yield* resolveClaudeHomePath(claudeSettings);
+  const raw = yield* fs.readFileString(path.join(home, ".claude.json")).pipe(
+    Effect.map((value): string | undefined => value),
+    Effect.catchCause(() => Effect.succeed(undefined)),
+  );
+  if (raw === undefined) return undefined;
+  return cachedClaudeUsageFromJson(raw);
+});
 
 function parseClaudeInitializationCommands(
   commands: ReadonlyArray<ClaudeSlashCommand> | undefined,
@@ -556,14 +647,28 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       subscriptionType: capabilities.subscriptionType,
       authMethod: capabilities.tokenSource,
     }) ?? apiProviderAuthMetadata(capabilities.apiProvider);
-  const usageLimits = !capabilities.usage
+  const usageUnavailable = claudeUsageUnavailableFallback(capabilities);
+  const cachedUsage =
+    isClaudeFirstPartyOAuth(capabilities) &&
+    (!capabilities.usage?.rate_limits_available || !capabilities.usage.rate_limits)
+      ? yield* readCachedClaudeUsage(claudeSettings)
+      : undefined;
+  const effectiveUsage = cachedUsage ?? capabilities.usage;
+  const usageLimits = !effectiveUsage
     ? makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" })
     : scopedLimitNames
       ? yield* recordClaudeUsageResponse(scopedLimitNames, {
-          response: capabilities.usage,
+          response: effectiveUsage,
           checkedAt,
+          unavailableReason: usageUnavailable.reason,
+          ...(usageUnavailable.message ? { unavailableMessage: usageUnavailable.message } : {}),
         })
-      : claudeUsageResponseToLimits({ response: capabilities.usage, checkedAt }).limits;
+      : claudeUsageResponseToLimits({
+          response: effectiveUsage,
+          checkedAt,
+          unavailableReason: usageUnavailable.reason,
+          ...(usageUnavailable.message ? { unavailableMessage: usageUnavailable.message } : {}),
+        }).limits;
   return buildServerProvider({
     presentation: CLAUDE_PRESENTATION,
     enabled: claudeSettings.enabled,

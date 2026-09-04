@@ -62,7 +62,10 @@ import { discoverClaudeSkills } from "./ClaudeSkills.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
-const CAPABILITIES_PROBE_TTL = Duration.minutes(5);
+// Claude's OAuth usage endpoint rate-limits repeated reads much more aggressively
+// than local provider health checks. Turn-driven rate-limit events still update
+// the published windows immediately between these full snapshots.
+const CAPABILITIES_PROBE_TTL = Duration.minutes(15);
 
 function isClaudeNativeCommandPath(commandPath: string): boolean {
   const normalized = normalizeCommandPath(commandPath);

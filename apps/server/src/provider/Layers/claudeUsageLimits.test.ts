@@ -95,6 +95,24 @@ describe("claudeUsageResponseToLimits", () => {
     ).toEqual({ checkedAt, windows: [], unavailable: { reason: "unsupported" } });
   });
 
+  it("can classify an unavailable OAuth read as a temporary probe failure", () => {
+    expect(
+      claudeUsageResponseToLimits({
+        checkedAt,
+        response: { rate_limits_available: false, rate_limits: null },
+        unavailableReason: "probeFailed",
+        unavailableMessage: "Claude temporarily could not read subscription limits.",
+      }).limits,
+    ).toEqual({
+      checkedAt,
+      windows: [],
+      unavailable: {
+        reason: "probeFailed",
+        message: "Claude temporarily could not read subscription limits.",
+      },
+    });
+  });
+
   it("skips a window the endpoint reports without a utilization", () => {
     expect(
       claudeUsageResponseToLimits({

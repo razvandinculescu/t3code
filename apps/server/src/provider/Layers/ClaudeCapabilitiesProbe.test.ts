@@ -8,11 +8,49 @@ import * as Schema from "effect/Schema";
 
 import {
   buildClaudeCapabilitiesProbeQueryOptions,
+  cachedClaudeUsageFromJson,
   CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES,
   probeClaudeCapabilities,
 } from "./ClaudeProvider.ts";
 
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
+
+it("maps Claude's cached usage without reading credentials", () => {
+  assert.deepEqual(
+    cachedClaudeUsageFromJson(
+      JSON.stringify({
+        unrelated: "ignored",
+        cachedUsageUtilization: {
+          fetchedAtMs: 1_788_510_804_364,
+          utilization: {
+            five_hour: { utilization: 11, resets_at: "2026-09-04T12:00:00Z" },
+            seven_day: { utilization: 6, resets_at: "2026-09-11T06:00:00Z" },
+            limits: [
+              {
+                kind: "weekly_scoped",
+                percent: 11,
+                resets_at: "2026-09-11T06:00:00Z",
+                scope: { model: { display_name: "Fable" } },
+              },
+            ],
+          },
+        },
+      }),
+    ),
+    {
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 11, resets_at: "2026-09-04T12:00:00Z" },
+        seven_day: { utilization: 6, resets_at: "2026-09-11T06:00:00Z" },
+        ...({
+          model_scoped: [
+            { display_name: "Fable", utilization: 11, resets_at: "2026-09-11T06:00:00Z" },
+          ],
+        } as object),
+      },
+    },
+  );
+});
 
 it("isolates Claude capability probes without dropping workspace setting sources", () => {
   const abortController = new AbortController();
