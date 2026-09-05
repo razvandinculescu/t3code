@@ -9,7 +9,6 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Cache from "effect/Cache";
-import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -18,7 +17,6 @@ import * as Schema from "effect/Schema";
 
 import {
   buildClaudeCapabilitiesProbeQueryOptions,
-  cachedClaudeUsageFromJson,
   checkClaudeProviderStatus,
   CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES,
   externalClaudeUsageLimitsFromJson,
@@ -89,65 +87,6 @@ it("rejects malformed wrapper usage instead of publishing misleading limits", ()
     undefined,
   );
   assert.equal(externalClaudeUsageLimitsFromJson("not json", "2026-09-04T12:00:00Z"), undefined);
-});
-
-const CACHED_USAGE_FILE = JSON.stringify({
-  unrelated: "ignored",
-  cachedUsageUtilization: {
-    fetchedAtMs: Date.parse("2026-09-04T08:33:24.364Z"),
-    utilization: {
-      five_hour: { utilization: 11, resets_at: "2026-09-04T12:00:00Z" },
-      seven_day: { utilization: 6, resets_at: "2026-09-11T06:00:00Z" },
-      limits: [
-        {
-          kind: "weekly_scoped",
-          percent: 11,
-          resets_at: "2026-09-11T06:00:00Z",
-          scope: { model: { display_name: "Fable" } },
-        },
-      ],
-    },
-  },
-});
-
-it("maps Claude's cached usage without reading credentials", () => {
-  assert.deepEqual(
-    cachedClaudeUsageFromJson(CACHED_USAGE_FILE, DateTime.makeUnsafe("2026-09-04T10:00:00Z")),
-    {
-      usage: {
-        rate_limits_available: true,
-        rate_limits: {
-          five_hour: { utilization: 11, resets_at: "2026-09-04T12:00:00Z" },
-          seven_day: { utilization: 6, resets_at: "2026-09-11T06:00:00Z" },
-          ...({
-            model_scoped: [
-              { display_name: "Fable", utilization: 11, resets_at: "2026-09-11T06:00:00Z" },
-            ],
-          } as object),
-        },
-      },
-      // The cache's own fetch time, not the status check that read it.
-      checkedAt: "2026-09-04T08:33:24.364Z",
-    },
-  );
-});
-
-it("drops cached windows whose reset already passed", () => {
-  const afterSessionReset = cachedClaudeUsageFromJson(
-    CACHED_USAGE_FILE,
-    DateTime.makeUnsafe("2026-09-04T13:00:00Z"),
-  );
-  assert.deepEqual(afterSessionReset?.usage.rate_limits, {
-    seven_day: { utilization: 6, resets_at: "2026-09-11T06:00:00Z" },
-    ...({
-      model_scoped: [{ display_name: "Fable", utilization: 11, resets_at: "2026-09-11T06:00:00Z" }],
-    } as object),
-  });
-
-  assert.equal(
-    cachedClaudeUsageFromJson(CACHED_USAGE_FILE, DateTime.makeUnsafe("2026-09-11T06:00:01Z")),
-    undefined,
-  );
 });
 
 it("isolates Claude capability probes without dropping workspace setting sources", () => {
@@ -273,6 +212,7 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
       );
 
       assert.deepEqual(capabilities, {
+        usageCheckedAt: "1970-01-01T00:00:00.000Z",
         email: "dev@example.com",
         subscriptionType: "pro",
         tokenSource: "oauth",
@@ -471,5 +411,121 @@ it.effect("preserves initialized capabilities when optional usage times out", ()
     ]);
     assert.equal(capabilities?.usage, undefined);
     assert.equal(abortSignal?.aborted, true);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "reads fresh limits through stored login while preserving static-token capabilities",
+  () =>
+    Effect.gen(function* () {
+      const environments: Array<ClaudeSdk.Options["env"]> = [];
+      const signals: Array<AbortSignal | undefined> = [];
+      const query = vi.spyOn(ClaudeSdk, "query").mockImplementation(({ options }) => {
+        environments.push(options?.env);
+        signals.push(options?.abortController?.signal);
+        const storedLogin = options?.env?.CLAUDE_CODE_OAUTH_TOKEN === undefined;
+        if (storedLogin) assert.deepEqual(options?.settingSources, []);
+        return {
+          initializationResult: async () => ({
+            account: {
+              email: "dev@example.com",
+              subscriptionType: storedLogin ? "max" : "Claude Max",
+              apiProvider: "firstParty",
+            },
+            commands: storedLogin
+              ? []
+              : [{ name: "review", description: "Review changes", argumentHint: "" }],
+          }),
+          usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({
+            rate_limits_available: storedLogin,
+            rate_limits: storedLogin ? { seven_day: { utilization: 1, resets_at: null } } : null,
+          }),
+        } as ReturnType<typeof ClaudeSdk.query>;
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(() => query.mockRestore()));
+      const environment = { CLAUDE_CODE_OAUTH_TOKEN: "test-static-token" };
+      const capabilities = yield* probeClaudeCapabilities(
+        decodeClaudeSettings({ binaryPath: "claude" }),
+        environment,
+      );
+      assert.equal(environments.length, 2);
+      assert.equal(environment.CLAUDE_CODE_OAUTH_TOKEN, "test-static-token");
+      assert.equal(environments[0]?.CLAUDE_CODE_OAUTH_TOKEN, "test-static-token");
+      assert.equal(capabilities?.subscriptionType, "Claude Max");
+      assert.equal(capabilities?.slashCommands[0]?.name, "review");
+      assert.equal(capabilities?.usage?.rate_limits?.seven_day?.utilization, 1);
+      assert.ok(capabilities?.usageCheckedAt);
+      assert.ok(signals.every((signal) => signal?.aborted));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("does not replace limits with another stored account or probe custom backends", () =>
+  Effect.gen(function* () {
+    let calls = 0;
+    const query = vi.spyOn(ClaudeSdk, "query").mockImplementation(({ options }) => {
+      calls++;
+      const storedLogin = options?.env?.CLAUDE_CODE_OAUTH_TOKEN === undefined;
+      return {
+        initializationResult: async () => ({
+          account: {
+            email: storedLogin ? "other@example.com" : "dev@example.com",
+            subscriptionType: "max",
+            apiProvider: "firstParty",
+          },
+        }),
+        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({
+          rate_limits_available: storedLogin,
+          rate_limits: storedLogin ? { seven_day: { utilization: 99, resets_at: null } } : null,
+        }),
+      } as ReturnType<typeof ClaudeSdk.query>;
+    });
+    yield* Effect.addFinalizer(() => Effect.sync(() => query.mockRestore()));
+    const settings = decodeClaudeSettings({ binaryPath: "claude" });
+    const environment = { CLAUDE_CODE_OAUTH_TOKEN: "test-static-token" };
+    const capabilities = yield* probeClaudeCapabilities(settings, environment);
+    assert.equal(calls, 2);
+    assert.equal(capabilities?.usage?.rate_limits_available, false);
+    for (const override of [
+      { ANTHROPIC_BASE_URL: "https://example.com" },
+      { ANTHROPIC_AUTH_TOKEN: "custom-token" },
+      { ANTHROPIC_API_KEY: "custom-key" },
+    ]) {
+      calls = 0;
+      yield* probeClaudeCapabilities(settings, { ...environment, ...override });
+      assert.equal(calls, 1);
+    }
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("keeps static-token authentication when the stored-login usage request times out", () =>
+  Effect.gen(function* () {
+    const usageStarted = yield* Deferred.make<void>();
+    const signals: Array<AbortSignal | undefined> = [];
+    const query = vi.spyOn(ClaudeSdk, "query").mockImplementation(({ options }) => {
+      signals.push(options?.abortController?.signal);
+      const storedLogin = options?.env?.CLAUDE_CODE_OAUTH_TOKEN === undefined;
+      return {
+        initializationResult: async () => ({
+          account: { subscriptionType: "max", apiProvider: "firstParty" },
+        }),
+        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => {
+          if (!storedLogin)
+            return Promise.resolve({ rate_limits_available: false, rate_limits: null });
+          Deferred.doneUnsafe(usageStarted, Effect.void);
+          return new Promise(() => {});
+        },
+      } as ReturnType<typeof ClaudeSdk.query>;
+    });
+    yield* Effect.addFinalizer(() => Effect.sync(() => query.mockRestore()));
+    const probe = yield* probeClaudeCapabilities(decodeClaudeSettings({ binaryPath: "claude" }), {
+      CLAUDE_CODE_OAUTH_TOKEN: "test-static-token",
+    }).pipe(Effect.forkChild);
+    yield* Deferred.await(usageStarted);
+    yield* TestClock.adjust("4 seconds");
+    const capabilities = yield* Fiber.join(probe);
+    assert.equal(capabilities?.subscriptionType, "max");
+    assert.equal(capabilities?.usage?.rate_limits_available, false);
+    assert.equal(signals.length, 2);
+    assert.ok(signals.every((signal) => signal?.aborted));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

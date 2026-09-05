@@ -253,7 +253,7 @@ function ProviderLimits({
 }) {
   const limits = provider.usageLimits;
   if (!limits) return null;
-  const notice = limitsNotice(limits);
+  const notice = limitsNotice(limits, Math.max(now, Date.parse(provider.checkedAt)));
   return (
     <section className="flex flex-col gap-3">
       <AccountHeading
@@ -374,7 +374,7 @@ function SourceAccountLimits({
   readonly sourceKind: string;
   readonly now: number;
 }) {
-  const notice = limitsNotice(account.usageLimits);
+  const notice = limitsNotice(account.usageLimits, now);
   return (
     <section className="flex flex-col gap-3">
       <AccountHeading

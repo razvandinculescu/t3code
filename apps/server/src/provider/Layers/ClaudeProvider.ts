@@ -35,7 +35,7 @@ import {
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
-import { makeClaudeEnvironment, resolveClaudeHomePath } from "../Drivers/ClaudeHome.ts";
+import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 import { makeUnavailableUsageLimits, makeUsageLimits } from "../providerUsageLimits.ts";
 import {
@@ -305,105 +305,8 @@ type ClaudeCapabilitiesProbe = {
    * otherwise successful response mean the account has none (API key).
    */
   readonly usage?: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
+  readonly usageCheckedAt?: string;
 };
-
-const CachedClaudeUsageWindow = Schema.Struct({
-  utilization: Schema.NullOr(Schema.Number),
-  resets_at: Schema.NullOr(Schema.String),
-});
-const CachedClaudeUsageLimit = Schema.Struct({
-  kind: Schema.String,
-  percent: Schema.NullOr(Schema.Number),
-  resets_at: Schema.NullOr(Schema.String),
-  scope: Schema.NullOr(
-    Schema.Struct({
-      model: Schema.NullOr(Schema.Struct({ display_name: Schema.String })),
-    }),
-  ),
-});
-const CachedClaudeUsageFile = Schema.fromJsonString(
-  Schema.Struct({
-    cachedUsageUtilization: Schema.Struct({
-      fetchedAtMs: Schema.Number,
-      utilization: Schema.Struct({
-        five_hour: Schema.optionalKey(Schema.NullOr(CachedClaudeUsageWindow)),
-        seven_day: Schema.optionalKey(Schema.NullOr(CachedClaudeUsageWindow)),
-        limits: Schema.optionalKey(Schema.Array(CachedClaudeUsageLimit)),
-      }),
-    }),
-  }),
-);
-const decodeCachedClaudeUsageFile = Schema.decodeUnknownOption(CachedClaudeUsageFile);
-
-/** Usage windows recovered from Claude Code's on-disk cache, stamped with when the CLI fetched them. */
-export type CachedClaudeUsage = {
-  readonly usage: NonNullable<ClaudeCapabilitiesProbe["usage"]>;
-  readonly checkedAt: string;
-};
-
-/**
- * The CLI refreshes this cache on its own schedule, so it can be hours old.
- * A window whose reset already passed would publish a dead percentage next
- * to a past reset time, so it is dropped; the survivors carry the cache's
- * own `fetchedAtMs` as `checkedAt` instead of pretending to be fresh.
- */
-export function cachedClaudeUsageFromJson(
-  raw: string,
-  now: DateTime.Utc,
-): CachedClaudeUsage | undefined {
-  const decoded = decodeCachedClaudeUsageFile(raw);
-  if (Option.isNone(decoded)) return undefined;
-  const cached = decoded.value.cachedUsageUtilization;
-  const nowMs = DateTime.toEpochMillis(now);
-  const isCurrent = (resetsAt: string | null) => {
-    if (!resetsAt) return true;
-    const reset = DateTime.make(resetsAt);
-    return Option.isNone(reset) || DateTime.toEpochMillis(reset.value) > nowMs;
-  };
-  const { limits = [] } = cached.utilization;
-  const five_hour = cached.utilization.five_hour ?? null;
-  const seven_day = cached.utilization.seven_day ?? null;
-  const currentFiveHour = five_hour && isCurrent(five_hour.resets_at) ? five_hour : null;
-  const currentSevenDay = seven_day && isCurrent(seven_day.resets_at) ? seven_day : null;
-  const modelScoped = limits.flatMap((limit) => {
-    const displayName = limit.scope?.model?.display_name;
-    return limit.kind === "weekly_scoped" &&
-      displayName &&
-      limit.percent !== null &&
-      isCurrent(limit.resets_at)
-      ? [{ display_name: displayName, utilization: limit.percent, resets_at: limit.resets_at }]
-      : [];
-  });
-  if (!currentFiveHour && !currentSevenDay && modelScoped.length === 0) return undefined;
-  const fetchedAt = Option.getOrElse(DateTime.make(cached.fetchedAtMs), () => now);
-  return {
-    usage: {
-      rate_limits_available: true,
-      rate_limits: {
-        ...(currentFiveHour ? { five_hour: currentFiveHour } : {}),
-        ...(currentSevenDay ? { seven_day: currentSevenDay } : {}),
-        ...(modelScoped.length > 0 ? { model_scoped: modelScoped } : {}),
-      },
-    } as NonNullable<ClaudeCapabilitiesProbe["usage"]>,
-    checkedAt: DateTime.formatIso(fetchedAt),
-  };
-}
-
-const readCachedClaudeUsage = Effect.fn("readCachedClaudeUsage")(function* (
-  claudeSettings: ClaudeSettings,
-): Effect.fn.Return<CachedClaudeUsage | undefined, never, FileSystem.FileSystem | Path.Path> {
-  // Custom CLAUDE_CONFIG_DIR layouts are not guaranteed to use ~/.claude.json.
-  if (claudeSettings.homePath.trim().length > 0) return undefined;
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const home = yield* resolveClaudeHomePath(claudeSettings);
-  const raw = yield* fs.readFileString(path.join(home, ".claude.json")).pipe(
-    Effect.map((value): string | undefined => value),
-    Effect.catchCause(() => Effect.succeed(undefined)),
-  );
-  if (raw === undefined) return undefined;
-  return cachedClaudeUsageFromJson(raw, yield* DateTime.now);
-});
 
 function parseClaudeInitializationCommands(
   commands: ReadonlyArray<ClaudeSlashCommand> | undefined,
@@ -490,10 +393,11 @@ function waitForAbortSignal(signal: AbortSignal): Promise<void> {
  * This is used as a fallback when `claude auth status` does not include
  * subscription type information.
  */
-const probeClaudeCapabilities = (
+const probeClaudeCapabilitiesOnce = (
   claudeSettings: ClaudeSettings,
   environment?: NodeJS.ProcessEnv,
   cwd?: string,
+  usageOnly = false,
 ) => {
   const abort = new AbortController();
   return Effect.gen(function* () {
@@ -510,12 +414,15 @@ const probeClaudeCapabilities = (
         prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
           await waitForAbortSignal(abort.signal);
         })(),
-        options: buildClaudeCapabilitiesProbeQueryOptions({
-          executablePath,
-          abortController: abort,
-          environment: claudeEnvironment,
-          cwd,
-        }),
+        options: {
+          ...buildClaudeCapabilitiesProbeQueryOptions({
+            executablePath,
+            abortController: abort,
+            environment: claudeEnvironment,
+            cwd,
+          }),
+          ...(usageOnly ? { settingSources: [] } : {}),
+        },
       });
       const init = await q.initializationResult();
       return { q, init };
@@ -548,7 +455,7 @@ const probeClaudeCapabilities = (
           tokenSource: account?.tokenSource,
           apiProvider: account?.apiProvider,
           slashCommands: parseClaudeInitializationCommands(init.commands),
-          ...(usage ? { usage } : {}),
+          ...(usage ? { usage, usageCheckedAt: DateTime.formatIso(yield* DateTime.now) } : {}),
         } satisfies ClaudeCapabilitiesProbe;
       }),
     ),
@@ -561,6 +468,48 @@ const probeClaudeCapabilities = (
     Effect.map((result) => (Result.isSuccess(result) ? result.success : undefined)),
   );
 };
+
+/** Keep conversation auth intact; setup-token credentials cannot read subscription usage. */
+const probeClaudeCapabilities = Effect.fn("probeClaudeCapabilities")(function* (
+  claudeSettings: ClaudeSettings,
+  environment: NodeJS.ProcessEnv = process.env,
+  cwd?: string,
+) {
+  const capabilities = yield* probeClaudeCapabilitiesOnce(claudeSettings, environment, cwd);
+  if (
+    !capabilities ||
+    !isClaudeFirstPartyOAuth(capabilities) ||
+    capabilities.usage?.rate_limits_available ||
+    !environment.CLAUDE_CODE_OAUTH_TOKEN?.trim() ||
+    environment.ANTHROPIC_AUTH_TOKEN ||
+    environment.ANTHROPIC_API_KEY ||
+    environment.ANTHROPIC_BASE_URL
+  )
+    return capabilities;
+
+  // The CLI owns stored-login lookup and refresh, including platform keychains.
+  // Never read credentials in T3 or change the environment of an active session.
+  const storedLogin = yield* probeClaudeCapabilitiesOnce(
+    claudeSettings,
+    { ...environment, CLAUDE_CODE_OAUTH_TOKEN: undefined },
+    cwd,
+    true,
+  );
+  if (
+    !storedLogin ||
+    !isClaudeFirstPartyOAuth(storedLogin) ||
+    !storedLogin.usage?.rate_limits_available ||
+    !storedLogin.usage.rate_limits ||
+    (capabilities.email && capabilities.email !== storedLogin.email)
+  )
+    return capabilities;
+
+  return {
+    ...capabilities,
+    usage: storedLogin.usage,
+    ...(storedLogin.usageCheckedAt ? { usageCheckedAt: storedLogin.usageCheckedAt } : {}),
+  };
+});
 
 const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
   claudeSettings: ClaudeSettings,
@@ -752,13 +701,8 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       authMethod: capabilities.tokenSource,
     }) ?? apiProviderAuthMetadata(capabilities.apiProvider);
   const usageUnavailable = claudeUsageUnavailableFallback(capabilities);
-  const cachedUsage =
-    isClaudeFirstPartyOAuth(capabilities) &&
-    (!capabilities.usage?.rate_limits_available || !capabilities.usage.rate_limits)
-      ? yield* readCachedClaudeUsage(claudeSettings)
-      : undefined;
-  const effectiveUsage = cachedUsage?.usage ?? capabilities.usage;
-  const usageCheckedAt = cachedUsage?.checkedAt ?? checkedAt;
+  const effectiveUsage = capabilities.usage;
+  const usageCheckedAt = capabilities.usageCheckedAt ?? checkedAt;
   const externalUsage =
     usageUnavailable.reason === "unsupported"
       ? yield* resolveExternalUsage

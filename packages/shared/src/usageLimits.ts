@@ -151,14 +151,18 @@ export function providerLimitsLabel(
 }
 
 /** The one-line status under a provider heading when there are no bars to draw. */
-export function limitsNotice(limits: ServerProviderUsageLimits): string | null {
+export function limitsNotice(limits: ServerProviderUsageLimits, now?: number): string | null {
   if (limits.unavailable?.reason === "unsupported") {
     return limits.unavailable.message ?? "This account has no subscription limits.";
   }
   if (limits.unavailable?.reason === "probeFailed") {
     return limits.unavailable.message ?? "Could not read limits.";
   }
-  return limits.windows.length === 0 ? "No limits reported." : null;
+  if (limits.windows.length === 0) return "No limits reported.";
+  if (now !== undefined && now - Date.parse(limits.checkedAt) > 15 * 60_000) {
+    return "Limits are out of date. Refresh to try again.";
+  }
+  return null;
 }
 
 export function resetMillis(window: ServerProviderUsageWindow): number | null {

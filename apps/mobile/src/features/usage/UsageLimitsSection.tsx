@@ -112,7 +112,7 @@ function AccountLimits(props: {
   const { limits, now } = props;
   const color = useBarColor(props.driver);
   if (!limits) return null;
-  const notice = limitsNotice(limits);
+  const notice = limitsNotice(limits, now);
   return (
     <View className={props.first ? "gap-3 p-4" : "gap-3 border-t border-border-subtle p-4"}>
       <View className="flex-row items-center gap-2">
@@ -244,7 +244,7 @@ function ProviderLimits(props: {
       instanceLabel={providerLimitsLabel(provider, (driver) => DRIVER_LABEL[driver])}
       detail={provider.auth.label}
       limits={provider.usageLimits}
-      now={now}
+      now={Math.max(now, Date.parse(provider.checkedAt))}
       first={props.first}
       footer={
         credits ? (
@@ -252,7 +252,7 @@ function ProviderLimits(props: {
             environmentId={environmentId}
             instanceId={provider.instanceId}
             credits={credits}
-            now={now}
+            now={Math.max(now, Date.parse(provider.checkedAt))}
           />
         ) : undefined
       }

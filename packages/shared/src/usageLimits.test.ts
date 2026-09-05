@@ -72,6 +72,14 @@ describe("pace", () => {
 });
 
 describe("limitsNotice", () => {
+  it("does not present old cached percentages as current limits", () => {
+    const checkedAt = "2026-09-03T11:00:00.000Z";
+    const limits = { checkedAt, windows: [window] };
+    expect(limitsNotice(limits, Date.parse(checkedAt) + 15 * 60_000)).toBeNull();
+    expect(limitsNotice(limits, Date.parse(checkedAt) + 15 * 60_000 + 1)).toBe(
+      "Limits are out of date. Refresh to try again.",
+    );
+  });
   it("explains empty bars and passes provider messages through", () => {
     const checkedAt = "2026-09-03T11:00:00.000Z";
     expect(limitsNotice({ checkedAt, windows: [window] })).toBeNull();
