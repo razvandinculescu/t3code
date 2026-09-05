@@ -1,12 +1,15 @@
 import {
+  type CustomModelSetting,
   MODEL_SLUG_ALIASES_BY_PROVIDER,
-  type ModelCapabilities,
+  ModelCapabilities,
   type ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
 
@@ -247,39 +250,73 @@ export function normalizeCustomModelSlug(model: string | null | undefined): stri
   return model.trim() || null;
 }
 
-export interface NormalizedCustomModelEntry {
+/** A custom model setting with its optional fields resolved. */
+export interface CustomModelDefinition {
   readonly slug: string;
-  readonly capabilities?: ModelCapabilities;
+  readonly name: string;
+  readonly capabilities: ModelCapabilities | null;
+}
+
+const decodeCustomModelCapabilities = Schema.decodeUnknownOption(ModelCapabilities);
+
+/**
+ * Read a `customModels` setting into resolved definitions. Accepts the typed
+ * union as well as the opaque `providerInstances[id].config` blob clients see,
+ * so it tolerates bare slugs, malformed rows, and unparseable capabilities
+ * (dropped rather than failing the whole list). Slugs are trimmed and
+ * deduplicated, first occurrence wins; `name` falls back to the slug.
+ */
+export function readCustomModelEntries(value: unknown): CustomModelDefinition[] {
+  if (!Array.isArray(value)) return [];
+  const entries: CustomModelDefinition[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    const record =
+      typeof raw === "string"
+        ? { slug: raw }
+        : raw !== null && typeof raw === "object"
+          ? (raw as { slug?: unknown; name?: unknown; capabilities?: unknown })
+          : null;
+    if (!record) continue;
+    const slug = normalizeCustomModelSlug(typeof record.slug === "string" ? record.slug : null);
+    if (!slug || seen.has(slug)) continue;
+    seen.add(slug);
+    const name =
+      (typeof record.name === "string" ? normalizeCustomModelSlug(record.name) : null) ?? slug;
+    const capabilities =
+      record.capabilities === undefined || record.capabilities === null
+        ? null
+        : Option.getOrNull(decodeCustomModelCapabilities(record.capabilities));
+    entries.push({
+      slug,
+      name,
+      capabilities: capabilities
+        ? createModelCapabilities({ optionDescriptors: capabilities.optionDescriptors ?? [] })
+        : null,
+    });
+  }
+  return entries;
+}
+
+/** Slugs of a `customModels` setting, in stored order. */
+export function readCustomModelSlugs(value: unknown): string[] {
+  return readCustomModelEntries(value).map((entry) => entry.slug);
 }
 
 /**
- * Custom model entries are either bare slugs or `{ slug, capabilities? }`
- * objects (`ClaudeCustomModelEntry` in contracts). Normalizes both to a slug
- * plus whatever capabilities the entry declared. Returns null for entries
- * without a usable slug so callers reading opaque config blobs can map
- * straight over the raw array.
+ * Write a definition back to the compact stored shape: a bare slug when it
+ * carries nothing custom, otherwise an entry with only the set fields.
  */
-export function normalizeCustomModelEntry(
-  entry:
-    | string
-    | { readonly slug?: unknown; readonly capabilities?: ModelCapabilities | undefined }
-    | null
-    | undefined,
-): NormalizedCustomModelEntry | null {
-  if (typeof entry === "string") {
-    const slug = normalizeCustomModelSlug(entry);
-    return slug ? { slug } : null;
-  }
-  if (entry === null || entry === undefined || typeof entry !== "object") {
-    return null;
-  }
-  const slug = normalizeCustomModelSlug(typeof entry.slug === "string" ? entry.slug : null);
-  if (!slug) {
-    return null;
-  }
+export function toCustomModelSetting(entry: CustomModelDefinition): CustomModelSetting {
+  const descriptors = entry.capabilities?.optionDescriptors ?? [];
+  const name = entry.name !== entry.slug ? entry.name : undefined;
+  if (!name && descriptors.length === 0) return entry.slug;
   return {
-    slug,
-    ...(entry.capabilities !== undefined ? { capabilities: entry.capabilities } : {}),
+    slug: entry.slug,
+    ...(name ? { name } : {}),
+    ...(descriptors.length > 0
+      ? { capabilities: createModelCapabilities({ optionDescriptors: descriptors }) }
+      : {}),
   };
 }
 

@@ -24,8 +24,12 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { normalizeCustomModelEntry } from "@t3tools/shared/model";
 
+import {
+  type CustomModelDefinition,
+  readCustomModelEntries,
+  toCustomModelSetting,
+} from "@t3tools/shared/model";
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { normalizeProviderAccentColor } from "../../providerInstances";
@@ -97,34 +101,13 @@ function providerEnvironmentsEqual(
 }
 
 /**
- * Reconcile a Models-section slug list back to config entries: kept slugs
- * preserve their raw entry (so `{ slug, capabilities }` objects survive
- * add/remove from the UI), newly added slugs land as bare strings.
+ * Read `customModels` from the opaque config blob. The concrete driver
+ * schemas type it as `CustomModelSetting[]`, but it arrives here as
+ * `Schema.Unknown`, so the shared reader does the shape checking.
  */
-export function reconcileCustomModelEntries(
-  current: ReadonlyArray<{ readonly slug: string; readonly raw: unknown }>,
-  nextSlugs: ReadonlyArray<string>,
-): Array<unknown> {
-  const rawBySlug = new Map(current.map((entry) => [entry.slug, entry.raw]));
-  return nextSlugs.map((slug) => rawBySlug.get(slug) ?? slug);
-}
-
-/**
- * Read `customModels` from the opaque config blob as slug + raw entry pairs.
- * Entries are bare slugs or `{ slug, capabilities? }` objects; the section
- * dedupes/adds/removes by slug, and writes reconcile back to the raw entries
- * so object entries (with their capabilities) survive UI edits.
- */
-function readConfigCustomModels(
-  config: unknown,
-): ReadonlyArray<{ readonly slug: string; readonly raw: unknown }> {
+function readConfigCustomModels(config: unknown): ReadonlyArray<CustomModelDefinition> {
   if (config === null || typeof config !== "object") return [];
-  const value = (config as Record<string, unknown>).customModels;
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((raw) => {
-    const slug = normalizeCustomModelEntry(raw)?.slug;
-    return slug ? [{ slug, raw }] : [];
-  });
+  return readCustomModelEntries((config as Record<string, unknown>).customModels);
 }
 
 /**
@@ -146,9 +129,14 @@ function nextConfigBlobWithValue(
   return base;
 }
 
+/**
+ * Custom rows come from current settings so name/descriptor edits show
+ * instantly; a bare entry falls back to the live row's driver-default
+ * capabilities (the server fills those in on its next probe).
+ */
 export function deriveProviderModelsForDisplay(input: {
   readonly liveModels: ReadonlyArray<ServerProviderModel> | undefined;
-  readonly customModels: ReadonlyArray<string>;
+  readonly customModels: ReadonlyArray<CustomModelDefinition>;
 }): ReadonlyArray<ServerProviderModel> {
   const liveCustomModelsBySlug = new Map(
     Arr.filterMap(input.liveModels ?? [], (model) =>
@@ -156,15 +144,13 @@ export function deriveProviderModelsForDisplay(input: {
     ),
   );
   const serverModels = input.liveModels?.filter((model) => !model.isCustom) ?? [];
-  const customModels = input.customModels.map(
-    (slug) =>
-      liveCustomModelsBySlug.get(slug) ?? {
-        slug,
-        name: slug,
-        isCustom: true,
-        capabilities: null,
-      },
-  );
+  const customModels = input.customModels.map((entry) => ({
+    slug: entry.slug,
+    name: entry.name,
+    isCustom: true,
+    capabilities:
+      entry.capabilities ?? liveCustomModelsBySlug.get(entry.slug)?.capabilities ?? null,
+  }));
   return [...serverModels, ...customModels];
 }
 
@@ -481,9 +467,8 @@ export function ProviderInstanceCard({
   const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
     ? instance.driver
     : null;
-  const customModelEntries =
+  const customModels =
     instance.driver === "antigravity" ? [] : readConfigCustomModels(instance.config);
-  const customModels = customModelEntries.map((entry) => entry.slug);
   // Server-returned models may lag behind settings writes. Treat probe
   // models as the source for built-ins only; custom rows come directly
   // from the current instance config so add/remove reflects immediately.
@@ -524,11 +509,11 @@ export function ProviderInstanceCard({
     );
   };
 
-  const updateCustomModels = (next: ReadonlyArray<string>) => {
+  const updateCustomModels = (next: ReadonlyArray<CustomModelDefinition>) => {
     const nextConfig = nextConfigBlobWithValue(
       instance.config,
       "customModels",
-      reconcileCustomModelEntries(customModelEntries, next),
+      next.map(toCustomModelSetting),
     );
     const { config: _omit, ...rest } = instance;
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);

@@ -10,9 +10,10 @@ import {
   getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
   getProviderOptionDescriptors,
+  readCustomModelEntries,
+  toCustomModelSetting,
   getProviderOptionBooleanSelectionValue,
   getProviderOptionStringSelectionValue,
-  normalizeCustomModelEntry,
 } from "./model.ts";
 
 const codexCaps: ModelCapabilities = createModelCapabilities({
@@ -60,40 +61,6 @@ const claudeCaps: ModelCapabilities = createModelCapabilities({
       currentValue: "1m",
     },
   ],
-});
-
-describe("normalizeCustomModelEntry", () => {
-  it("normalizes bare slugs and never expands aliases", () => {
-    expect(normalizeCustomModelEntry(" opus ")).toEqual({ slug: "opus" });
-    expect(normalizeCustomModelEntry("  ")).toBeNull();
-    expect(normalizeCustomModelEntry("")).toBeNull();
-  });
-
-  it("passes object entries through with their capabilities", () => {
-    const capabilities = createModelCapabilities({
-      optionDescriptors: [
-        {
-          id: "effort",
-          label: "Reasoning",
-          type: "select",
-          options: [{ id: "high", label: "High", isDefault: true }],
-        },
-      ],
-    });
-    expect(normalizeCustomModelEntry({ slug: " k3 ", capabilities })).toEqual({
-      slug: "k3",
-      capabilities,
-    });
-    expect(normalizeCustomModelEntry({ slug: "k3" })).toEqual({ slug: "k3" });
-  });
-
-  it("rejects entries without a usable slug", () => {
-    expect(normalizeCustomModelEntry(null)).toBeNull();
-    expect(normalizeCustomModelEntry(undefined)).toBeNull();
-    expect(normalizeCustomModelEntry(42 as unknown as string)).toBeNull();
-    expect(normalizeCustomModelEntry({ capabilities: {} })).toBeNull();
-    expect(normalizeCustomModelEntry({ slug: 42 })).toBeNull();
-  });
 });
 
 describe("descriptor helpers", () => {
@@ -225,5 +192,66 @@ describe("applyClaudePromptEffortPrefix", () => {
     expect(applyClaudePromptEffortPrefix("/home/theo/app.ts crashed on load", "ultrathink")).toBe(
       "Ultrathink:\n/home/theo/app.ts crashed on load",
     );
+  });
+});
+
+describe("readCustomModelEntries", () => {
+  const capabilities: ModelCapabilities = {
+    optionDescriptors: [
+      {
+        id: "effort",
+        label: "Reasoning",
+        type: "select",
+        options: [{ id: "high", label: "High", isDefault: true }],
+        currentValue: "high",
+      },
+    ],
+  };
+
+  it("resolves bare slugs and entries, trimming and deduplicating on slug", () => {
+    expect(
+      readCustomModelEntries([
+        " bare ",
+        { slug: "named", name: " Named ", capabilities },
+        "bare",
+        { slug: "named", name: "Second" },
+        "",
+        { name: "no slug" },
+        42,
+      ]),
+    ).toEqual([
+      { slug: "bare", name: "bare", capabilities: null },
+      { slug: "named", name: "Named", capabilities },
+    ]);
+  });
+
+  it("drops unparseable capabilities but keeps the entry", () => {
+    expect(
+      readCustomModelEntries([{ slug: "x", capabilities: { optionDescriptors: "nope" } }]),
+    ).toEqual([{ slug: "x", name: "x", capabilities: null }]);
+    expect(readCustomModelEntries("not a list")).toEqual([]);
+  });
+
+  it("preserves legacy Claude capabilities when renaming a model in the editor", () => {
+    const legacy = { slug: "k3", capabilities };
+    const [entry] = readCustomModelEntries([legacy]);
+    expect(entry).toBeDefined();
+    const saved = toCustomModelSetting({ ...entry!, name: "Kimi K3" });
+    expect(saved).toEqual({ ...legacy, name: "Kimi K3" });
+    expect(readCustomModelEntries([saved])).toEqual([
+      { slug: "k3", name: "Kimi K3", capabilities },
+    ]);
+  });
+
+  it("writes the compact stored shape back", () => {
+    expect(toCustomModelSetting({ slug: "x", name: "x", capabilities: null })).toBe("x");
+    expect(
+      toCustomModelSetting({ slug: "x", name: "x", capabilities: { optionDescriptors: [] } }),
+    ).toBe("x");
+    expect(toCustomModelSetting({ slug: "x", name: "X", capabilities })).toEqual({
+      slug: "x",
+      name: "X",
+      capabilities,
+    });
   });
 });

@@ -1,5 +1,5 @@
 import {
-  type ClaudeCustomModelEntry,
+  type CustomModelSetting,
   type ModelCapabilities,
   type ModelSelection,
   ProviderDriverKind,
@@ -10,7 +10,7 @@ import {
   getModelSelectionStringOptionValue,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
-  normalizeCustomModelEntry,
+  readCustomModelEntries,
 } from "@t3tools/shared/model";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 
@@ -72,68 +72,52 @@ export function resolveClaudeModelCatalog(manifest: ModelManifestData): ClaudeMo
 export const BUNDLED_CLAUDE_MODEL_CATALOG = resolveClaudeModelCatalog(BUNDLED_MODEL_MANIFEST);
 
 /**
- * Guardrail effort map for custom entries. Built-in profiles carry their own
- * `effortMap`; without one, a stale `ultracode`/`ultrathink` selection on a
- * custom model would reach the SDK as a raw effort value. Mirrors the
- * built-in semantics: ultracode runs at xhigh, ultrathink is prompt-injected
- * and never an API effort.
- */
-const CUSTOM_MODEL_EFFORT_MAP: Record<string, string | null> = {
-  ultracode: "xhigh",
-  ultrathink: null,
-};
-
-/**
- * Keeps custom model aliases opaque while preserving canonical built-in models
- * and capabilities. Custom entries are appended to the catalog with the
- * capabilities they declared (if any), so the adapter and text generation
- * resolve effort/thinking for them through the same catalog paths as
- * built-ins. Their runtime stays empty apart from `CUSTOM_MODEL_EFFORT_MAP`,
- * so no built-in suffixes, context windows, or version gating leak onto them.
+ * Scope the catalog to one instance's settings: custom model slugs stay opaque
+ * (a built-in alias they shadow is dropped, canonical slugs and capabilities
+ * are preserved), and custom entries that declare their own capabilities are
+ * appended so the adapter resolves effort / fast mode / thinking against the
+ * user's descriptors instead of the empty default. Custom entries carry no
+ * runtime profile apart from the harness effort mapping; other option values
+ * pass through to Claude Code verbatim.
  */
 export function scopeClaudeModelCatalog(
   catalog: ClaudeModelCatalog,
-  customModels: ReadonlyArray<ClaudeCustomModelEntry>,
+  customModels: ReadonlyArray<CustomModelSetting>,
 ): ClaudeModelCatalog {
-  const appended: Array<ClaudeCatalogModel> = [];
-  const customSlugs = new Set<string>();
-  for (const candidate of customModels) {
-    const entry = normalizeCustomModelEntry(candidate);
-    if (!entry) continue;
-    const slugKey = entry.slug.toLowerCase();
-    if (customSlugs.has(slugKey)) continue;
-    customSlugs.add(slugKey);
-    if (catalog.models.some((existing) => existing.model.slug === entry.slug)) continue;
-    appended.push({
+  const customEntries = readCustomModelEntries(customModels);
+  if (customEntries.length === 0) return catalog;
+  const customAliases = new Set(customEntries.map((entry) => entry.slug.toLowerCase()));
+
+  const builtInModels = catalog.models.map((entry) => {
+    if (!entry.model.aliases?.some((alias) => customAliases.has(alias.toLowerCase()))) {
+      return entry;
+    }
+    return {
+      ...entry,
+      model: {
+        ...entry.model,
+        aliases: entry.model.aliases.filter((alias) => !customAliases.has(alias.toLowerCase())),
+      },
+    };
+  });
+  const builtInSlugs = new Set(builtInModels.map((entry) => entry.model.slug));
+  const customCatalogModels: Array<ClaudeCatalogModel> = [];
+  for (const entry of customEntries) {
+    if (builtInSlugs.has(entry.slug)) continue;
+    customCatalogModels.push({
       model: {
         slug: entry.slug,
-        name: entry.slug,
+        name: entry.name,
         isCustom: true,
-        capabilities: entry.capabilities ?? null,
+        capabilities: entry.capabilities,
       },
-      runtime: { effortMap: { ...CUSTOM_MODEL_EFFORT_MAP } },
+      // Harness keywords must not reach the API as raw effort values.
+      runtime: { effortMap: { ultracode: "xhigh", ultrathink: null } },
       compatibility: {},
     });
   }
-  if (customSlugs.size === 0) return catalog;
 
-  return {
-    models: [
-      ...catalog.models.map((entry) => {
-        if (!entry.model.aliases?.some((alias) => customSlugs.has(alias.toLowerCase()))) {
-          return entry;
-        }
-        return {
-          ...entry,
-          model: {
-            ...entry.model,
-            aliases: entry.model.aliases.filter((alias) => !customSlugs.has(alias.toLowerCase())),
-          },
-        };
-      }),
-      ...appended,
-    ],
-  };
+  return { models: [...builtInModels, ...customCatalogModels] };
 }
 
 export function resolveClaudeCatalogModel(

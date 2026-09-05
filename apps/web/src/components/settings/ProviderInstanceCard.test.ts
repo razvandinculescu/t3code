@@ -8,38 +8,7 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 
-import {
-  deriveProviderModelsForDisplay,
-  ProviderInstanceCard,
-  reconcileCustomModelEntries,
-} from "./ProviderInstanceCard";
-
-describe("reconcileCustomModelEntries", () => {
-  it("preserves object entries on kept slugs and adds new slugs as bare strings", () => {
-    const capable = {
-      slug: "k3",
-      capabilities: {
-        optionDescriptors: [
-          {
-            id: "effort",
-            label: "Reasoning",
-            type: "select",
-            options: [{ id: "high", label: "High", isDefault: true }],
-          },
-        ],
-      },
-    };
-    const current = [
-      { slug: "k3", raw: capable },
-      { slug: "removed", raw: "removed" },
-    ];
-
-    expect(reconcileCustomModelEntries(current, ["k3", "qwen-local"])).toEqual([
-      capable,
-      "qwen-local",
-    ]);
-  });
-});
+import { deriveProviderModelsForDisplay, ProviderInstanceCard } from "./ProviderInstanceCard";
 
 describe("deriveProviderModelsForDisplay", () => {
   it("uses current config custom models instead of stale live custom rows", () => {
@@ -67,9 +36,50 @@ describe("deriveProviderModelsForDisplay", () => {
     expect(
       deriveProviderModelsForDisplay({
         liveModels,
-        customModels: ["kept-custom"],
+        customModels: [{ slug: "kept-custom", name: "kept-custom", capabilities: null }],
       }).map((model) => model.slug),
     ).toEqual(["server-model", "kept-custom"]);
+  });
+
+  it("prefers the entry's name and capabilities over the stale live custom row", () => {
+    const liveCapabilities = { optionDescriptors: [] };
+    const customCapabilities = {
+      optionDescriptors: [
+        {
+          id: "reasoningEffort",
+          label: "Reasoning",
+          type: "select" as const,
+          options: [{ id: "high", label: "High", isDefault: true }],
+          currentValue: "high",
+        },
+      ],
+    };
+    const liveModels: ReadonlyArray<ServerProviderModel> = [
+      { slug: "bare", name: "bare", isCustom: true, capabilities: liveCapabilities },
+      { slug: "named", name: "named", isCustom: true, capabilities: liveCapabilities },
+    ];
+
+    const display = deriveProviderModelsForDisplay({
+      liveModels,
+      customModels: [
+        { slug: "bare", name: "bare", capabilities: null },
+        { slug: "named", name: "My Model", capabilities: customCapabilities },
+      ],
+    });
+
+    // A bare entry keeps the driver default the server filled in.
+    expect(display[0]).toEqual({
+      slug: "bare",
+      name: "bare",
+      isCustom: true,
+      capabilities: liveCapabilities,
+    });
+    expect(display[1]).toEqual({
+      slug: "named",
+      name: "My Model",
+      isCustom: true,
+      capabilities: customCapabilities,
+    });
   });
 
   it("shows a redacted provider email in the editor header status line", () => {
