@@ -6,7 +6,7 @@ import {
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { causeErrorTag } from "@t3tools/shared/observability";
-import { resolveCommandPath } from "@t3tools/shared/shell";
+import { findCommandPath } from "@t3tools/shared/shell";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -436,9 +436,7 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
     if (homebrew.kind === "formula" && homebrew.name.toLowerCase() === "mise") {
       return manual;
     }
-    const brewPath = yield* resolveCommandPath("brew", { env: context.env }).pipe(
-      Effect.catchTags({ CommandResolutionError: () => Effect.succeed(null) }),
-    );
+    const brewPath = yield* findCommandPath("brew", { env: context.env });
     if (!brewPath) {
       return manual;
     }
@@ -545,12 +543,10 @@ export const resolveProviderMaintenanceCapabilitiesEffect = Effect.fn(
   }
 
   const env = options?.env ?? (yield* readCommandLookupEnv);
-  // resolveCommandPath checks explicit paths for existence too, so a missing
+  // findCommandPath checks explicit paths for existence too, so a missing
   // binary always lands in the no-context branch and never gets an update
   // command it cannot run.
-  const resolvedCommandPath = yield* resolveCommandPath(binaryPath, { env }).pipe(
-    Effect.catchTags({ CommandResolutionError: () => Effect.succeed(null) }),
-  );
+  const resolvedCommandPath = yield* findCommandPath(binaryPath, { env });
   if (!resolvedCommandPath) {
     return yield* resolver.resolve(null);
   }

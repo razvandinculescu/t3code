@@ -1,3 +1,5 @@
+import * as Tracer from "effect/Tracer";
+import * as Exit from "effect/Exit";
 // @effect-diagnostics nodeBuiltinImport:off
 import { expect, it } from "@effect/vitest";
 import * as NodeChildProcess from "node:child_process";
@@ -229,16 +231,30 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     });
   });
 
-  it.effect("stays manual-only when the binary cannot be located", () =>
-    resolveProviderMaintenanceCapabilitiesEffect(packageToolUpdate, {
-      binaryPath: "package-tool",
-      env: { PATH: "" },
-    }).pipe(
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
-      Effect.map((capabilities) => {
-        expect(capabilities).toEqual(manualPackageTool);
-      }),
-    ),
+  it.effect("missing maintenance binaries remain manual-only without failed spans", () =>
+    Effect.gen(function* () {
+      const failures: string[] = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          const end = span.end.bind(span);
+          span.end = (time, exit) => {
+            if (Exit.isFailure(exit)) failures.push(options.name);
+            end(time, exit);
+          };
+          return span;
+        },
+      });
+      const capabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(packageToolUpdate, {
+        binaryPath: "package-tool",
+        env: { PATH: "" },
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+        Effect.withTracer(tracer),
+      );
+      expect(capabilities).toEqual(manualPackageTool);
+      expect(failures).toEqual([]);
+    }),
   );
 
   it.effect.skipIf(!symlinksSupported)(

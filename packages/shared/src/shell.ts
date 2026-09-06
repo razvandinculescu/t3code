@@ -616,7 +616,8 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
   return null;
 });
 
-export const resolveCommandPath = Effect.fn("shell.resolveCommandPath")(function* (
+/** Find an optional executable without reporting its absence as a failed operation. */
+export const findCommandPath = Effect.fn("shell.findCommandPath")(function* (
   command: string,
   options: CommandAvailabilityOptions = {},
 ) {
@@ -624,6 +625,14 @@ export const resolveCommandPath = Effect.fn("shell.resolveCommandPath")(function
     env: options.env ?? (yield* HostProcessEnvironment),
     platform: yield* HostProcessPlatform,
   });
+  return resolved;
+});
+
+export const resolveCommandPath = Effect.fn("shell.resolveCommandPath")(function* (
+  command: string,
+  options: CommandAvailabilityOptions = {},
+) {
+  const resolved = yield* findCommandPath(command, options);
   if (resolved === null) {
     return yield* new CommandResolutionError({ command, reason: "not-found" });
   }

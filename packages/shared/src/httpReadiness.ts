@@ -132,6 +132,9 @@ export const waitForHttpReady = Effect.fn("shared.httpReadiness.waitForHttpReady
   );
 
   const result = yield* readinessClient.execute(HttpClientRequest.get(requestUrl)).pipe(
+    // Refused connections are expected while the backend starts. Trace the
+    // readiness operation as a whole; its terminal failure retains the last cause.
+    Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
     Effect.mapError((cause) => (isMadeError(cause) ? cause : fail(cause))),
     Effect.timeoutOption(Duration.millis(timeoutMs)),
   );
