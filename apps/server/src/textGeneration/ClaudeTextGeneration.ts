@@ -53,14 +53,18 @@ const CLAUDE_TIMEOUT_MS = 180_000;
 
 /**
  * Schema for the wrapper JSON returned by `claude -p --output-format json`.
- * We only care about `structured_output`.
+ * Verbose mode returns a message array instead of the result object.
  */
 const ClaudeOutputEnvelope = Schema.Struct({
   structured_output: Schema.Unknown,
+  is_error: Schema.optionalKey(Schema.Boolean),
 });
+const isClaudeResult = Schema.is(Schema.Struct({ type: Schema.Literal("result") }));
+const isClaudeMessageArray = Schema.is(Schema.Array(Schema.Unknown));
 
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
-const decodeClaudeOutputEnvelope = Schema.decodeEffect(Schema.fromJsonString(ClaudeOutputEnvelope));
+const decodeClaudeOutputJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeClaudeOutputEnvelope = Schema.decodeUnknownEffect(ClaudeOutputEnvelope);
 
 export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(function* (
   claudeSettings: ClaudeSettings,
@@ -254,7 +258,12 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       ),
     );
 
-    const envelope = yield* decodeClaudeOutputEnvelope(rawStdout).pipe(
+    const envelope = yield* decodeClaudeOutputJson(rawStdout).pipe(
+      Effect.flatMap((output) =>
+        decodeClaudeOutputEnvelope(
+          isClaudeMessageArray(output) ? output.findLast(isClaudeResult) : output,
+        ),
+      ),
       Effect.catchTags({
         SchemaError: (cause) =>
           Effect.fail(
@@ -266,6 +275,13 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           ),
       }),
     );
+
+    if (envelope.is_error) {
+      return yield* new TextGenerationError({
+        operation,
+        detail: "Claude CLI reported an unsuccessful result.",
+      });
+    }
 
     const decodeOutput = Schema.decodeEffect(outputSchemaJson);
     return yield* decodeOutput(envelope.structured_output).pipe(

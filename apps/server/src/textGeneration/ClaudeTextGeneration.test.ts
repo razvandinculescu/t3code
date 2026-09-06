@@ -362,6 +362,85 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
     ),
   );
 
+  it.effect("generates titles from the final result in verbose Claude JSON output", () =>
+    withFakeClaudeEnv(
+      {
+        output: JSON.stringify([
+          { type: "system", subtype: "init" },
+          { type: "result", structured_output: { title: "Earlier result" } },
+          { type: "assistant", message: { content: [] } },
+          {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            structured_output: { title: "Verificare loguri după repornire" },
+          },
+          { type: "rate_limit_event", rate_limit_info: { status: "allowed" } },
+        ]),
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Verifică logurile după repornire.",
+            modelSelection: createModelSelection(
+              ProviderInstanceId.make("claudeAgent"),
+              SYNTHETIC_CLAUDE_STANDARD_MODEL,
+            ),
+          });
+          expect(generated.title).toBe("Verificare loguri după repornire");
+        }),
+    ),
+  );
+
+  for (const [name, output, detail] of [
+    ["malformed JSON", "not JSON", "unexpected output format"],
+    [
+      "no result",
+      JSON.stringify([{ type: "assistant", structured_output: { title: "Wrong" } }]),
+      "unexpected output format",
+    ],
+    ["empty messages", "[]", "unexpected output format"],
+    [
+      "missing structured output",
+      JSON.stringify([{ type: "result", is_error: false }]),
+      "unexpected output format",
+    ],
+    [
+      "invalid title",
+      JSON.stringify([{ type: "result", structured_output: { title: 42 } }]),
+      "invalid structured output",
+    ],
+    [
+      "failed result",
+      JSON.stringify([{ type: "result", is_error: true, structured_output: { title: "Wrong" } }]),
+      "unsuccessful result",
+    ],
+    [
+      "failed object result",
+      JSON.stringify({ is_error: true, structured_output: { title: "Wrong" } }),
+      "unsuccessful result",
+    ],
+  ] as const) {
+    it.effect(`rejects ${name} from Claude text generation`, () =>
+      withFakeClaudeEnv({ output }, (textGeneration) =>
+        Effect.gen(function* () {
+          const error = yield* textGeneration
+            .generateThreadTitle({
+              cwd: process.cwd(),
+              message: "Name this thread.",
+              modelSelection: createModelSelection(
+                ProviderInstanceId.make("claudeAgent"),
+                SYNTHETIC_CLAUDE_STANDARD_MODEL,
+              ),
+            })
+            .pipe(Effect.flip);
+          expect(error.detail).toContain(detail);
+        }),
+      ),
+    );
+  }
+
   it.effect("runs Claude text generation with the configured CLAUDE_CONFIG_DIR", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
