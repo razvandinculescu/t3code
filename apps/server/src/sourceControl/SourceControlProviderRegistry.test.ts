@@ -87,6 +87,7 @@ function makeRegistry(input: {
   return SourceControlProviderRegistry.make.pipe(
     Effect.provide(
       Layer.mergeAll(
+        NodeServices.layer,
         registryLayer,
         processLayer,
         Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({}),
@@ -98,7 +99,6 @@ function makeRegistry(input: {
         }).pipe(Layer.provide(NodeServices.layer)),
       ),
     ),
-    Effect.provide(NodeServices.layer),
     Effect.provideService(CommandAvailability, () => Effect.succeed(true)),
   );
 }
