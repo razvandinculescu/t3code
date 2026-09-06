@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import { HttpClient } from "effect/unstable/http";
 import type { AcpError } from "effect-acp/errors";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -40,6 +41,7 @@ import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { removeAntigravitySessionFiles } from "../acp/AntigravitySessionFiles.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeAntigravityAdapter } from "../Layers/AntigravityAdapter.ts";
+import { makeAntigravityUsageProbe } from "../Layers/antigravityUsageLimits.ts";
 import { makeAntigravityProvider } from "../Layers/AntigravityProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import * as ModelManifest from "../ModelManifest.ts";
@@ -56,6 +58,7 @@ const DRIVER = ProviderDriverKind.make("antigravity");
 const decodeSettings = Schema.decodeSync(AntigravitySettings);
 
 export type AntigravityDriverEnv =
+  | HttpClient.HttpClient
   | AntigravityInstallation
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
@@ -276,7 +279,12 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
           .pipe(Effect.provideService(Scope.Scope, processScope));
       }).pipe(Effect.scoped);
 
+      const usageProbe =
+        auth.authMethod === "oauth-personal"
+          ? yield* makeAntigravityUsageProbe(profileDirectory)
+          : undefined;
       const provider = yield* makeAntigravityProvider(settings, {
+        ...(usageProbe ? { usageProbe } : {}),
         stampIdentity: classifyModels,
         probe,
         auth: { type: auth.authMethod, label: antigravityAuthLabel(auth.authMethod) },

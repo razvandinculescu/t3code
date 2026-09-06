@@ -5,6 +5,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSetupError,
+  type ServerProviderUsageLimits,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -111,7 +112,11 @@ const testLayer = Layer.merge(
 type ProbeError = EffectAcpErrors.AcpError | ProviderSetupError;
 
 const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
-  options: { readonly enabled?: boolean; readonly safe?: boolean } = {},
+  options: {
+    readonly enabled?: boolean;
+    readonly safe?: boolean;
+    readonly usageProbe?: Effect.Effect<ServerProviderUsageLimits | undefined>;
+  } = {},
 ) {
   const initialProbe = yield* Deferred.make<EffectAcpSchema.InitializeResponse, ProbeError>();
   const probeCalls = yield* Ref.make(0);
@@ -123,6 +128,7 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
   const provider = yield* makeAntigravityProvider(
     decodeSettings({ enabled: options.enabled ?? true, customModels: ["do-not-seed-me"] }),
     {
+      ...(options.usageProbe ? { usageProbe: options.usageProbe } : {}),
       stampIdentity: (snapshot) => Effect.succeed({ ...snapshot, instanceId, driver }),
       probe: Ref.update(probeCalls, (count) => count + 1).pipe(
         Effect.andThen(Ref.get(probe)),
@@ -642,3 +648,55 @@ it.layer(testLayer)("Antigravity provider snapshots", (it) => {
     ),
   );
 });
+
+const quotaSnapshot: ServerProviderUsageLimits = {
+  checkedAt: "2026-09-06T11:00:00.000Z",
+  windows: [{ id: "gemini-5h", kind: "session", label: "Gemini", usedPercent: 25 }],
+};
+
+it.effect(
+  "publishes subscription quotas, retains their timestamp on a failed refresh and clears them on sign-out",
+  () =>
+    Effect.gen(function* () {
+      const quota = yield* Ref.make<ServerProviderUsageLimits>(quotaSnapshot);
+      const h = yield* makeHarness({ usageProbe: Ref.get(quota) });
+      yield* h.initialize;
+      expect((yield* h.provider.snapshot.refresh).usageLimits).toEqual(quotaSnapshot);
+      yield* Ref.set(h.probe, Effect.succeed(initializeResult));
+      yield* h.provider.onSessionStarted(started);
+      expect((yield* h.provider.snapshot.refresh).usageLimits).toEqual(quotaSnapshot);
+      yield* Ref.set(quota, {
+        checkedAt: "2026-09-06T11:01:00.000Z",
+        windows: [],
+        unavailable: { reason: "probeFailed" },
+      });
+      expect((yield* h.provider.snapshot.refresh).usageLimits).toEqual(quotaSnapshot);
+      yield* h.provider.onSignedOut;
+      expect((yield* h.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);
+
+it.effect(
+  "does not restore another account's quotas when sign-out races an in-flight request",
+  () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const finish = yield* Deferred.make<ServerProviderUsageLimits>();
+      const currentProbe = yield* Ref.make<Effect.Effect<ServerProviderUsageLimits | undefined>>(
+        Effect.succeed(undefined),
+      );
+      const h = yield* makeHarness({ usageProbe: Ref.get(currentProbe).pipe(Effect.flatten) });
+      yield* h.initialize;
+      yield* Ref.set(
+        currentProbe,
+        Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(finish))),
+      );
+      yield* Ref.set(h.probe, Effect.succeed(initializeResult));
+      yield* h.provider.onSessionStarted(started);
+      yield* Deferred.await(entered);
+      yield* h.provider.onSignedOut;
+      yield* Deferred.succeed(finish, quotaSnapshot);
+      // Refresh joins the same semaphore, so it drains the stale probe first.
+      expect((yield* h.provider.snapshot.refresh).usageLimits).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);
