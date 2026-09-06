@@ -165,12 +165,24 @@ function isCliRemoteRefinementSpec(
   return spec.type === "cli" && spec.refineUnknownRemote !== undefined;
 }
 
-function probeCli(input: {
+const probeCli = Effect.fn("SourceControlProviderDiscovery.probeCli")(function* (input: {
   readonly spec: SourceControlCliDiscoverySpec;
+  readonly available: Effect.Effect<boolean>;
   readonly process: VcsProcess.VcsProcess["Service"];
   readonly cwd: string;
-}): Effect.Effect<DiscoveryProbeResult> {
-  return input.process
+}): Effect.fn.Return<DiscoveryProbeResult> {
+  if (!(yield* input.available)) {
+    return {
+      kind: input.spec.kind,
+      label: input.spec.label,
+      executable: input.spec.executable,
+      status: "missing",
+      version: Option.none(),
+      installHint: input.spec.installHint,
+      detail: Option.some(input.spec.installHint),
+    };
+  }
+  return yield* input.process
     .run({
       operation: "source-control.discovery.probe",
       command: input.spec.executable,
@@ -207,9 +219,10 @@ function probeCli(input: {
         } satisfies DiscoveryProbeResult),
       ),
     );
-}
+});
 
 export function probeSourceControlProvider(input: {
+  readonly available: Effect.Effect<boolean>;
   readonly spec: SourceControlProviderDiscoverySpec;
   readonly process: VcsProcess.VcsProcess["Service"];
   readonly cwd: string;
@@ -234,6 +247,7 @@ export function probeSourceControlProvider(input: {
   const spec = input.spec;
 
   return probeCli({
+    available: input.available,
     spec,
     process: input.process,
     cwd: input.cwd,

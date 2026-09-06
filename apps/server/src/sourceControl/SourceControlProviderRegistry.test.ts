@@ -1,3 +1,4 @@
+import { CommandAvailability } from "@t3tools/shared/shell";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
@@ -97,6 +98,8 @@ function makeRegistry(input: {
         }).pipe(Layer.provide(NodeServices.layer)),
       ),
     ),
+    Effect.provide(NodeServices.layer),
+    Effect.provideService(CommandAvailability, () => Effect.succeed(true)),
   );
 }
 

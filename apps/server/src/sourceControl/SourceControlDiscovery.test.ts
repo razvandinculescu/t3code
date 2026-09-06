@@ -1,3 +1,5 @@
+import { probeSourceControlProvider } from "./SourceControlProviderDiscovery.ts";
+import { CommandAvailability } from "@t3tools/shared/shell";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -51,8 +53,10 @@ const processOutput = (
 });
 
 it.effect("reports implemented tools separately from locally available executables", () => {
+  const commands: string[] = [];
   const processMock = {
     run: (input: VcsProcess.VcsProcessInput) => {
+      commands.push(input.command);
       if (input.command === "git") {
         return Effect.succeed(processOutput("git version 2.51.0\n"));
       }
@@ -163,10 +167,18 @@ it.effect("reports implemented tools separately from locally available executabl
         },
       ],
     );
+    assert.ok(!commands.includes("jj"));
+    assert.ok(!commands.includes("az"));
+    assert.ok(!commands.includes("glab"));
     const bitbucket = result.sourceControlProviders.find((item) => item.kind === "bitbucket");
     assert.ok(bitbucket);
     assert.strictEqual(bitbucket.executable, undefined);
-  }).pipe(Effect.provide(testLayer));
+  }).pipe(
+    Effect.provide(testLayer),
+    Effect.provideService(CommandAvailability, (command) =>
+      Effect.succeed(command === "git" || command === "gh"),
+    ),
+  );
 });
 
 it.effect("probes provider authentication without exposing token details", () => {
@@ -279,5 +291,52 @@ Logged in to gitlab.com as gitlab-user
         },
       ],
     );
-  }).pipe(Effect.provide(testLayer));
+  }).pipe(
+    Effect.provide(testLayer),
+    Effect.provideService(CommandAvailability, () => Effect.succeed(true)),
+  );
 });
+
+it.effect(
+  "retains a failure from a present executable instead of treating it as an absent tool",
+  () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const result = yield* probeSourceControlProvider({
+        spec: {
+          type: "cli",
+          kind: "azure-devops",
+          label: "Azure DevOps",
+          executable: "az",
+          versionArgs: ["--version"],
+          authArgs: ["account", "show"],
+          installHint: "Install Azure CLI.",
+          parseAuth: () => ({
+            status: "unknown",
+            account: Option.none(),
+            host: Option.none(),
+            detail: Option.none(),
+          }),
+        },
+        cwd: "/repo",
+        available: Effect.succeed(true),
+        process: VcsProcess.VcsProcess.of({
+          run: (input) => {
+            attempts++;
+            return Effect.fail(
+              new VcsProcessSpawnError({
+                operation: input.operation,
+                command: input.command,
+                cwd: input.cwd,
+                cause: new Error("Executable could not start"),
+              }),
+            );
+          },
+        }),
+      });
+      assert.strictEqual(attempts, 1);
+      assert.strictEqual(result.status, "missing");
+      assert.ok(Option.isSome(result.detail));
+      assert.ok(result.detail.value.includes("VCS process failed to spawn"));
+    }),
+);

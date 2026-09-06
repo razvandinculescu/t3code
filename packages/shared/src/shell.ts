@@ -553,7 +553,7 @@ const isExecutableFile = Effect.fnUntraced(function* (
 const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlatform")(function* (
   command: string,
   options: CommandAvailabilityOptions & { readonly platform: NodeJS.Platform },
-): Effect.fn.Return<string, CommandResolutionError, FileSystem.FileSystem | Path.Path> {
+): Effect.fn.Return<string | null, never, FileSystem.FileSystem | Path.Path> {
   const path = yield* Path.Path;
   const platform = options.platform;
   const env = options.env ?? process.env;
@@ -571,12 +571,12 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
         return candidate;
       }
     }
-    return yield* new CommandResolutionError({ command, reason: "not-found" });
+    return null;
   }
 
   const pathValue = resolvePathEnvironmentVariable(env);
   if (pathValue.length === 0) {
-    return yield* new CommandResolutionError({ command, reason: "not-found" });
+    return null;
   }
 
   const cacheKey = [platform, pathValue, windowsPathExtensions.join(";"), command].join(
@@ -587,7 +587,7 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
   const cached = cache.get(cacheKey);
   if (cached !== undefined && cached.expiresAtNanos > nowNanos) {
     if (cached.resolvedPath === null) {
-      return yield* new CommandResolutionError({ command, reason: "not-found" });
+      return null;
     }
     return cached.resolvedPath;
   }
@@ -613,17 +613,21 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
     }
   }
   cacheCommandResolution(cache, cacheKey, null, nowNanos);
-  return yield* new CommandResolutionError({ command, reason: "not-found" });
+  return null;
 });
 
 export const resolveCommandPath = Effect.fn("shell.resolveCommandPath")(function* (
   command: string,
   options: CommandAvailabilityOptions = {},
 ) {
-  return yield* resolveCommandPathForPlatform(command, {
+  const resolved = yield* resolveCommandPathForPlatform(command, {
     env: options.env ?? (yield* HostProcessEnvironment),
     platform: yield* HostProcessPlatform,
   });
+  if (resolved === null) {
+    return yield* new CommandResolutionError({ command, reason: "not-found" });
+  }
+  return resolved;
 });
 
 export const resolveSpawnCommand = Effect.fn("shell.resolveSpawnCommand")(function* (
@@ -661,10 +665,11 @@ export const isCommandAvailable = Effect.fn("shell.isCommandAvailable")(function
   command: string,
   options: CommandAvailabilityOptions = {},
 ) {
-  return yield* resolveCommandPath(command, options).pipe(
-    Effect.as(true),
-    Effect.catchTag("CommandResolutionError", () => Effect.succeed(false)),
-  );
+  const resolved = yield* resolveCommandPathForPlatform(command, {
+    env: options.env ?? (yield* HostProcessEnvironment),
+    platform: yield* HostProcessPlatform,
+  });
+  return resolved !== null;
 });
 
 export function resolveKnownWindowsCliDirs(env: NodeJS.ProcessEnv): ReadonlyArray<string> {

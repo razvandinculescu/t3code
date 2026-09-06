@@ -1,3 +1,6 @@
+import { CommandAvailability } from "@t3tools/shared/shell";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import {
   type SourceControlDiscoveryResult,
   type VcsDiscoveryItem,
@@ -66,28 +69,39 @@ export class SourceControlDiscovery extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
+  const isAvailable = yield* CommandAvailability;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const process = yield* VcsProcess.VcsProcess;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
 
-  const probe = <Kind extends VcsDriverKind>(
+  const probe = Effect.fn("SourceControlDiscovery.probe")(function* <Kind extends VcsDriverKind>(
     input: DiscoveryProbe & { readonly kind: Kind },
-  ): Effect.Effect<DiscoveryProbeResult<Kind>> => {
+  ): Effect.fn.Return<DiscoveryProbeResult<Kind>> {
     const executable = input.executable;
     const versionArgs = input.versionArgs;
 
-    if (!executable || !versionArgs) {
-      return Effect.succeed({
+    if (
+      !executable ||
+      !versionArgs ||
+      !(yield* isAvailable(executable).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      ))
+    ) {
+      return {
         kind: input.kind,
         label: input.label,
+        ...(executable ? { executable } : {}),
         implemented: input.implemented,
         status: "missing" as const,
         version: Option.none<string>(),
         installHint: input.installHint,
         detail: Option.some(input.installHint),
-      } satisfies DiscoveryProbeResult<Kind>);
+      } satisfies DiscoveryProbeResult<Kind>;
     }
 
-    return process
+    return yield* process
       .run({
         operation: "source-control.discovery.probe",
         command: executable,
@@ -126,7 +140,7 @@ export const make = Effect.gen(function* () {
           } satisfies DiscoveryProbeResult<Kind>),
         ),
       );
-  };
+  });
 
   return SourceControlDiscovery.of({
     discover: Effect.all({

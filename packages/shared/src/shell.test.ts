@@ -1,3 +1,5 @@
+import * as Tracer from "effect/Tracer";
+import * as Exit from "effect/Exit";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -335,6 +337,30 @@ describe("resolveKnownWindowsCliDirs", () => {
 });
 
 effectIt.layer(NodeServices.layer)("isCommandAvailable", (it) => {
+  it.effect("missing optional commands produce no failed spans, including cached misses", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const failures: string[] = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          const end = span.end.bind(span);
+          span.end = (time, exit) => {
+            if (Exit.isFailure(exit)) failures.push(options.name);
+            end(time, exit);
+          };
+          return span;
+        },
+      });
+      yield* Effect.gen(function* () {
+        for (const command of ["missing-t3-optional", "missing-t3-optional", `${dir}/missing`]) {
+          expect(yield* isCommandAvailable(command, { env: { PATH: dir } })).toBe(false);
+        }
+      }).pipe(Effect.withTracer(tracer), Effect.provideService(CommandResolutionCache, new Map()));
+      expect(failures).toEqual([]);
+    }),
+  );
   it.effect("returns false when PATH is empty", () =>
     Effect.gen(function* () {
       expect(
