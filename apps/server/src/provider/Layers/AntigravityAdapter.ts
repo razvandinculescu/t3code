@@ -14,6 +14,7 @@ import {
   type ProviderUserInputAnswers,
   type RuntimeTaskStatus,
   type ThreadId,
+  type ThreadTokenUsageSnapshot,
   type TurnCompletedPayload,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -124,6 +125,9 @@ function mapAntigravityError(threadId: ThreadId, method: string, cause: EffectAc
 }
 
 export interface AntigravityAdapterOptions {
+  readonly readContextUsage?: (
+    sessionId: string,
+  ) => Effect.Effect<ThreadTokenUsageSnapshot | undefined>;
   readonly instanceId: ProviderInstanceId;
   readonly makeRuntime: (
     input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner" | "onAuthorizationUrl">,
@@ -195,6 +199,8 @@ interface SessionContext {
   readonly nativeSessionId: string;
   readonly scope: Scope.Closeable;
   readonly runtime: Runtime;
+  hasNativeContextUsage?: boolean;
+  lastContextUsage?: ThreadTokenUsageSnapshot;
   readonly promptLock: Semaphore.Semaphore;
   readonly stopLock: Semaphore.Semaphore;
   readonly commandLock: Semaphore.Semaphore;
@@ -550,6 +556,33 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
     }).pipe(Effect.ensuring(Effect.sync(() => context.approvals.delete(requestId))));
   });
 
+  const publishContextUsage = Effect.fn("AntigravityAdapter.publishContextUsage")(function* (
+    context: SessionContext,
+  ) {
+    if (context.stopped || context.hasNativeContextUsage || !options.readContextUsage) return;
+    const usage = yield* options.readContextUsage(context.nativeSessionId);
+    if (!usage || context.stopped || context.hasNativeContextUsage) return;
+    const previous = context.lastContextUsage;
+    if (
+      previous &&
+      previous.usedTokens === usage.usedTokens &&
+      previous.maxTokens === usage.maxTokens &&
+      previous.inputTokens === usage.inputTokens &&
+      previous.cachedInputTokens === usage.cachedInputTokens &&
+      previous.outputTokens === usage.outputTokens &&
+      previous.reasoningOutputTokens === usage.reasoningOutputTokens
+    )
+      return;
+    context.lastContextUsage = usage;
+    yield* emit({
+      type: "thread.token-usage.updated",
+      ...(yield* stamp),
+      provider: PROVIDER,
+      threadId: context.threadId,
+      payload: { usage },
+    });
+  });
+
   const handleEvent = Effect.fn("AntigravityAdapter.handleEvent")(function* (
     context: SessionContext,
     event: AcpSessionRuntime.AcpSessionRuntimeEvent,
@@ -560,6 +593,21 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
     }
     if (context.stopped) return;
     switch (event._tag) {
+      case "ContextUsageUpdated":
+        context.hasNativeContextUsage = true;
+        yield* emit({
+          type: "thread.token-usage.updated",
+          ...(yield* stamp),
+          provider: PROVIDER,
+          threadId: context.threadId,
+          payload: {
+            usage: {
+              usedTokens: event.usedTokens,
+              ...(event.maxTokens > 0 ? { maxTokens: event.maxTokens } : {}),
+            },
+          },
+        });
+        return;
       case "ModeChanged":
         return;
       case "AvailableCommandsUpdated":
@@ -585,6 +633,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
             lifecycle: event._tag === "AssistantItemStarted" ? "item.started" : "item.completed",
           }),
         );
+        if (event._tag === "AssistantItemCompleted") yield* publishContextUsage(context);
         return;
       case "ThoughtDelta":
       case "ContentDelta":
@@ -913,6 +962,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                 payload: { providerThreadId: started.sessionId },
               });
               yield* runtime.drainEvents;
+              yield* publishContextUsage(running);
               if (running.stopped) {
                 return yield* new ProviderAdapterSessionClosedError({
                   provider: PROVIDER,
@@ -1104,6 +1154,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
       );
       const result = yield* Fiber.await(launch.fiber).pipe(Effect.flatMap((exit) => exit));
       yield* context.runtime.drainEvents;
+      yield* publishContextUsage(context);
       if (context.stopped) {
         return yield* new ProviderAdapterSessionClosedError({
           provider: PROVIDER,

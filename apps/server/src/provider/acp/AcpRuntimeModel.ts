@@ -82,6 +82,11 @@ export interface AcpPermissionRequest {
 
 export type AcpParsedSessionEvent =
   | {
+      readonly _tag: "ContextUsageUpdated";
+      readonly usedTokens: number;
+      readonly maxTokens: number;
+    }
+  | {
       readonly _tag: "ModeChanged";
       readonly modeId: string;
     }
@@ -793,6 +798,10 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
   let modeId: string | undefined;
 
   switch (upd.sessionUpdate) {
+    case "usage_update": {
+      events.push({ _tag: "ContextUsageUpdated", usedTokens: upd.used, maxTokens: upd.size });
+      break;
+    }
     case "config_option_update": {
       events.push({
         _tag: "ConfigOptionsUpdated",

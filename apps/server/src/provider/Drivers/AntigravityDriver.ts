@@ -41,6 +41,7 @@ import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { removeAntigravitySessionFiles } from "../acp/AntigravitySessionFiles.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeAntigravityAdapter } from "../Layers/AntigravityAdapter.ts";
+import { readAntigravityContextUsage } from "../acp/AntigravityContextUsage.ts";
 import { makeAntigravityUsageProbe } from "../Layers/antigravityUsageLimits.ts";
 import { makeAntigravityProvider } from "../Layers/AntigravityProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
@@ -308,6 +309,10 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
         Effect.map((manifest) => ModelManifest.manifestDefaultModel(manifest, DRIVER)),
       );
       const adapter = yield* makeAntigravityAdapter(settings, {
+        readContextUsage: (sessionId) =>
+          readAntigravityContextUsage(profileDirectory, sessionId).pipe(
+            Effect.provideService(Path.Path, path),
+          ),
         instanceId,
         makeRuntime,
         withProcess: authFlow.withProcess,

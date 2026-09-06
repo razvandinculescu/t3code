@@ -71,6 +71,7 @@ function nativeToolUpdate(
 
 const makeHarness = Effect.fn("makeAntigravityAdapterHarness")(function* (options?: {
   readonly enabled?: boolean;
+  readonly readContextUsage?: AntigravityAdapterOptions["readContextUsage"];
   readonly holdCancel?: boolean;
   readonly holdClose?: boolean;
   readonly holdDispatch?: boolean;
@@ -218,6 +219,7 @@ const makeHarness = Effect.fn("makeAntigravityAdapterHarness")(function* (option
     decodeSettings({ enabled: options?.enabled ?? true }),
     {
       instanceId,
+      ...(options?.readContextUsage ? { readContextUsage: options.readContextUsage } : {}),
       makeRuntime: (input) =>
         Effect.gen(function* () {
           launches.push(input);
@@ -1291,5 +1293,51 @@ it.layer(layer)("AntigravityAdapter", (it) => {
       expect(Exit.isFailure(stale)).toBe(true);
       expect(active.launches).toHaveLength(0);
     }),
+  );
+  it.effect(
+    "publishes saved context, refreshes it after a turn, and prioritizes native ACP updates",
+    () =>
+      Effect.gen(function* () {
+        let used = 800_000;
+        let reads = 0;
+        const h = yield* makeHarness({
+          readContextUsage: () =>
+            Effect.sync(() => {
+              reads++;
+              return { usedTokens: used, maxTokens: 1_000_000 };
+            }),
+        });
+        yield* h.adapter.startSession({
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "approval-required",
+        });
+        const initial = yield* h.waitForEvent((e) => e.type === "thread.token-usage.updated");
+        expect(initial).toMatchObject({
+          payload: { usage: { usedTokens: 800_000, maxTokens: 1_000_000 } },
+        });
+        used = 20_000;
+        const sending = yield* h.adapter
+          .sendTurn({ threadId, input: "Continue" })
+          .pipe(Effect.forkChild);
+        const prompt = yield* h.nextPrompt;
+        yield* Deferred.succeed(prompt.result, { stopReason: "end_turn" });
+        yield* Fiber.join(sending);
+        yield* h.waitForEvent((e) => e.type === "turn.completed");
+        expect(h.seen.findLast((e) => e.type === "thread.token-usage.updated")).toMatchObject({
+          payload: { usage: { usedTokens: 20_000 } },
+        });
+        yield* h.emitNative({ _tag: "ContextUsageUpdated", usedTokens: 123, maxTokens: 500_000 });
+        const before = reads;
+        const next = yield* h.adapter.sendTurn({ threadId, input: "Again" }).pipe(Effect.forkChild);
+        const second = yield* h.nextPrompt;
+        yield* Deferred.succeed(second.result, { stopReason: "end_turn" });
+        yield* Fiber.join(next);
+        yield* h.waitForEvent((e) => e.type === "turn.completed");
+        expect(reads).toBe(before);
+        expect(h.seen.findLast((e) => e.type === "thread.token-usage.updated")).toMatchObject({
+          payload: { usage: { usedTokens: 123, maxTokens: 500_000 } },
+        });
+      }),
   );
 });
