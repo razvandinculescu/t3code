@@ -2604,6 +2604,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
     ],
   };
+  // An omitted publish field lets electron-builder infer an unrelated CI provider.
+  // Local and preview builds have no feed unless one is configured explicitly.
+  buildConfig.publish = null;
   const updateChannel = resolveDesktopUpdateChannel(version);
   if (!isDesktopPreviewVersion(version)) {
     const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);

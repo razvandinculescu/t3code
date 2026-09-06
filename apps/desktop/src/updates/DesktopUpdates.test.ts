@@ -58,6 +58,26 @@ describe("DesktopUpdates", () => {
     );
   });
 
+  it.effect("does not poll or check for updates when a local build has no feed", () => {
+    const harness = makeHarness({ env: { T3CODE_DESKTOP_MOCK_UPDATES: "false" } });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        const state = yield* updates.getState;
+        assert.equal(state.enabled, false);
+        assert.equal(state.status, "disabled");
+        assert.deepEqual(
+          yield* updates.disabledReason,
+          Option.some("Automatic updates are not available because no update feed is configured."),
+        );
+        yield* TestClock.adjust(Duration.minutes(5));
+        yield* updates.check("manual");
+        assert.equal(harness.checkCount(), 0);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect("configures the updater and runs startup checks on the test clock", () => {
     const harness = makeHarness();
 
