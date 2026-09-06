@@ -36,11 +36,16 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
+import { readCodexThreadHistory } from "./CodexThreadHistory.ts";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
+
+const decodeThreadResumeResponse = Schema.decodeUnknownEffect(
+  EffectCodexSchema.V2ThreadResumeResponse,
+);
 
 const PROVIDER = ProviderDriverKind.make("codex");
 
@@ -683,6 +688,7 @@ type CodexThreadOpenResponse =
 type CodexThreadOpenMethod = "thread/start" | "thread/resume";
 
 interface CodexThreadOpenClient {
+  readonly raw: Pick<CodexClient.CodexAppServerClient["Service"]["raw"], "request">;
   readonly request: <M extends CodexThreadOpenMethod>(
     method: M,
     payload: CodexRpc.ClientRequestParamsByMethod[M],
@@ -710,12 +716,24 @@ export const openCodexThread = (input: {
     return input.client.request("thread/start", startParams);
   }
 
-  return input.client
+  return input.client.raw
     .request("thread/resume", {
       threadId: resumeThreadId,
       ...startParams,
+      excludeTurns: true,
     })
     .pipe(
+      Effect.flatMap((response) =>
+        decodeThreadResumeResponse(response).pipe(
+          Effect.mapError((error) =>
+            CodexErrors.CodexAppServerProtocolParseError.fromSchemaError(
+              "decode-response-payload",
+              error,
+              { method: "thread/resume" },
+            ),
+          ),
+        ),
+      ),
       Effect.catchIf(isRecoverableThreadResumeError, (error) =>
         Effect.logWarning("codex app-server thread resume fell back to fresh start", {
           threadId: input.threadId,
@@ -2390,11 +2408,7 @@ export const makeCodexSessionRuntime = (
         }),
       readThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;
-        const response = yield* client.request("thread/read", {
-          threadId: providerThreadId,
-          includeTurns: true,
-        });
-        return parseThreadSnapshot(response);
+        return yield* readCodexThreadHistory(client, providerThreadId);
       }),
       rollbackThread: (numTurns) =>
         Effect.gen(function* () {

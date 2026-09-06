@@ -48,18 +48,22 @@ function makeThreadOpenResponse(
     modelProvider: "openai",
     approvalPolicy: "never",
     approvalsReviewer: "user",
-    sandbox: { type: "danger-full-access" },
+    sandbox: { type: "dangerFullAccess" },
     thread: {
       id: threadId,
-      createdAt: "2026-04-18T00:00:00.000Z",
-      source: { session: "cli" },
+      sessionId: threadId,
+      cliVersion: "test",
+      cwd: "/tmp/project",
+      createdAt: 1776470400,
+      updatedAt: 1776470400,
+      source: "cli",
       turns: [],
-      status: {
-        state: "idle",
-        activeFlags: [],
-      },
+      ephemeral: false,
+      modelProvider: "openai",
+      preview: "",
+      status: { type: "idle" },
     },
-  } as unknown as CodexRpc.ClientRequestResponsesByMethod["thread/start"];
+  };
 }
 
 describe("buildTurnStartParams", () => {
@@ -781,6 +785,34 @@ describe("isRecoverableThreadResumeError", () => {
 });
 
 describe("openCodexThread", () => {
+  it.effect("resumes without hydrating history and preserves the existing thread", () =>
+    Effect.gen(function* () {
+      const resumed = makeThreadOpenResponse("existing-thread");
+      let params: unknown;
+      const opened = yield* openCodexThread({
+        client: {
+          request: () => Effect.die("must not start a replacement thread"),
+          raw: {
+            request: (method, payload) => {
+              NodeAssert.equal(method, "thread/resume");
+              params = payload;
+              return Effect.succeed(resumed);
+            },
+          },
+        },
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: "gpt-5.3-codex",
+        serviceTier: undefined,
+        resumeThreadId: "existing-thread",
+      });
+      NodeAssert.equal(opened.thread.id, "existing-thread");
+      NodeAssert.ok(typeof params === "object" && params !== null && "excludeTurns" in params);
+      NodeAssert.equal(params.excludeTurns, true);
+    }),
+  );
+
   it.effect("falls back to thread/start when resume fails recoverably", () =>
     Effect.gen(function* () {
       const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
@@ -804,7 +836,16 @@ describe("openCodexThread", () => {
       };
 
       const opened = yield* openCodexThread({
-        client,
+        client: {
+          ...client,
+          raw: {
+            request: (_method, payload) =>
+              client.request(
+                "thread/resume",
+                payload as CodexRpc.ClientRequestParamsByMethod["thread/resume"],
+              ),
+          },
+        },
         threadId: ThreadId.make("thread-1"),
         runtimeMode: "full-access",
         cwd: "/tmp/project",
@@ -843,7 +884,16 @@ describe("openCodexThread", () => {
       };
 
       const error = yield* openCodexThread({
-        client,
+        client: {
+          ...client,
+          raw: {
+            request: (_method, payload) =>
+              client.request(
+                "thread/resume",
+                payload as CodexRpc.ClientRequestParamsByMethod["thread/resume"],
+              ),
+          },
+        },
         threadId: ThreadId.make("thread-1"),
         runtimeMode: "full-access",
         cwd: "/tmp/project",
