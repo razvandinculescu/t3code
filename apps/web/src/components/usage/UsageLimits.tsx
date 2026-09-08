@@ -35,7 +35,7 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { UsageLimitsPooled } from "./UsageLimitsPooled";
+import { UsageLimitsAccounts } from "./UsageLimitsAccounts";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
 
 const PACE: Record<LimitPace, { readonly label: string; readonly icon: typeof GaugeIcon }> = {
@@ -316,7 +316,7 @@ export function ResetCredits({
 
 /**
  * Subscription quota across every connected environment's providers and hubs,
- * pooled per provider. Countdowns anchor to render time rather than ticking: a
+ * grouped per account. Countdowns anchor to render time rather than ticking: a
  * live clock would repaint the page every minute for no decision-changing gain.
  */
 export function UsageLimitsSection({
@@ -331,5 +331,5 @@ export function UsageLimitsSection({
     selectedEnvironmentIds === null
       ? presentations
       : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
-  return <UsageLimitsPooled presentations={selected} now={now} />;
+  return <UsageLimitsAccounts presentations={selected} now={now} />;
 }

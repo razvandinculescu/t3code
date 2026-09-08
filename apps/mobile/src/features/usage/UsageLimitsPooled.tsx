@@ -94,7 +94,7 @@ function PoolWindowCard({
       },
     });
   return (
-    <View className="gap-3 rounded-[24px] border-continuous bg-card p-4">
+    <View className="gap-3 border-t border-border/50 pt-4">
       <View className="flex-row items-start justify-between gap-3">
         <View className="gap-1">
           <Text className="text-sm font-t3-medium text-foreground">{pool.label}</Text>
@@ -132,11 +132,6 @@ function PoolWindowCard({
                 color={color}
                 pending={Boolean(window.resetsAt)}
               />
-              <View pointerEvents="none" className="absolute inset-0 items-center justify-center">
-                <Text className="text-xs font-t3-medium tabular-nums text-foreground">
-                  {index + 1}
-                </Text>
-              </View>
             </Pressable>
           );
         })}
@@ -207,7 +202,9 @@ export function UsageLimitsSection({
     selectedEnvironmentIds === null
       ? presentations
       : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
-  const pools = collectLimitPools(collectLimitAccounts(selected, now), now);
+  const pools = collectLimitAccounts(selected, now).flatMap((account) =>
+    collectLimitPools([account], now),
+  );
   const notices = collectLimitNotices(selected, now);
   const colors = useProviderColors();
   return (
@@ -225,11 +222,14 @@ export function UsageLimitsSection({
         </Text>
       ) : null}
       {pools.map((pool) => (
-        <View key={pool.driver} className="gap-3">
+        <View
+          key={pool.accounts[0]!.key}
+          className="gap-3 rounded-[24px] border-continuous bg-card p-4"
+        >
           <View className="flex-row items-center gap-2 px-1">
             <ProviderIcon provider={pool.driver} size={18} />
             <Text className="text-base font-t3-medium text-foreground">
-              {DRIVER_LABEL[pool.driver] ?? pool.driver}
+              {accountName(pool.accounts[0]!)}
             </Text>
           </View>
           {pool.windows.map((window) => (

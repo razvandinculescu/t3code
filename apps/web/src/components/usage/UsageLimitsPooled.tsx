@@ -63,7 +63,7 @@ function AccountChip({ email }: { readonly email: string }) {
  * The same mark the model picker uses for a native instance (provider glyph,
  * initials badge, accent); hub accounts have no instance, so they get the chip.
  */
-function AccountAvatar({
+export function AccountAvatar({
   account,
   className,
 }: {
@@ -93,7 +93,7 @@ function AccountAvatar({
  * is one, else a two-letter chip. The address itself is revealed on demand in
  * the segment's popover.
  */
-function AccountName({
+export function AccountName({
   account,
   className,
 }: {
@@ -216,13 +216,14 @@ function SegmentPopover({
  * reset confirm. The confirm is a sibling of the popover, not a child: dialogs
  * stack under popovers, and the popover closes as the confirm opens.
  */
-function PoolSegment({
+export function PoolSegment({
   account,
   window,
   reset,
   color,
   now,
   index,
+  compact = false,
 }: {
   readonly account: LimitAccount;
   readonly window: LimitPoolMember["window"];
@@ -231,6 +232,7 @@ function PoolSegment({
   readonly now: number;
   /** 1-based position in the bar, shown on the strip and its legend row to tie them together. */
   readonly index: number;
+  readonly compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const remaining = remainingPercent(window);
@@ -245,7 +247,10 @@ function PoolSegment({
             type="button"
             style={{ gridColumn: index, gridRow: 1 }}
             aria-label={`${account.displayName ?? (account.email ? accountInitials(account.email) : account.driver)}: ${remaining}% left${resetsIn ? `, ${resetsIn}` : ""}${credits ? `, ${credits} reset ${credits === 1 ? "credit" : "credits"} banked` : ""}`}
-            className="relative h-5 min-w-0 cursor-pointer overflow-hidden rounded-md bg-muted text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[popup-open]:ring-1 data-[popup-open]:ring-border @2xl/pool:h-8"
+            className={cn(
+              "relative min-w-0 cursor-pointer overflow-hidden rounded-md bg-muted text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[popup-open]:ring-1 data-[popup-open]:ring-border",
+              compact ? "h-3 w-full" : "h-5 @2xl/pool:h-8",
+            )}
           />
         }
       >
@@ -266,35 +271,46 @@ function PoolSegment({
             }}
           />
         ) : null}
-        <span
-          aria-hidden
-          className="absolute inset-0 flex items-center justify-center text-[10px] leading-none font-semibold text-foreground/80 tabular-nums @2xl/pool:hidden"
-        >
-          {index}
-        </span>
-        <div className="relative hidden h-full min-w-0 items-center gap-1.5 px-2 text-xs @2xl/pool:flex">
-          <AccountName account={account} className="min-w-0 truncate font-medium text-foreground" />
-          <span className="shrink-0 font-semibold text-foreground tabular-nums">{remaining}%</span>
-          {/* Countdown and badge get their own plate: fill and hatching run under them otherwise. */}
-          <span className="ms-auto flex shrink-0 items-center gap-1.5 rounded-sm bg-background/85 px-1.5 py-0.5 text-[11px] text-foreground tabular-nums">
-            {resetsIn?.replace("resets in ", "↻ ") ?? ""}
-            {credits ? (
-              <>
-                {resetsIn ? (
-                  <span aria-hidden className="text-muted-foreground">
-                    ·
-                  </span>
+        {!compact && (
+          <>
+            <span
+              aria-hidden
+              className="absolute inset-0 flex items-center justify-center text-[10px] leading-none font-semibold text-foreground/80 tabular-nums @2xl/pool:hidden"
+            >
+              {index}
+            </span>
+            <div className="relative hidden h-full min-w-0 items-center gap-1.5 px-2 text-xs @2xl/pool:flex">
+              <AccountName
+                account={account}
+                className="min-w-0 truncate font-medium text-foreground"
+              />
+              <span className="shrink-0 font-semibold text-foreground tabular-nums">
+                {remaining}%
+              </span>
+              {/* Countdown and badge get their own plate: fill and hatching run under them otherwise. */}
+              <span className="ms-auto flex shrink-0 items-center gap-1.5 rounded-sm bg-background/85 px-1.5 py-0.5 text-[11px] text-foreground tabular-nums">
+                {resetsIn?.replace("resets in ", "↻ ") ?? ""}
+                {credits ? (
+                  <>
+                    {resetsIn ? (
+                      <span aria-hidden className="text-muted-foreground">
+                        ·
+                      </span>
+                    ) : null}
+                    <span aria-hidden className="inline-flex items-center gap-0.5 font-semibold">
+                      <TicketIcon className="size-3" aria-hidden />
+                      {credits}
+                    </span>
+                  </>
                 ) : null}
-                <span aria-hidden className="inline-flex items-center gap-0.5 font-semibold">
-                  <TicketIcon className="size-3" aria-hidden />
-                  {credits}
-                </span>
-              </>
-            ) : null}
-          </span>
-        </div>
+              </span>
+            </div>
+          </>
+        )}
       </PopoverTrigger>
-      <LegendRow account={account} window={window} color={color} now={now} index={index} />
+      {!compact && (
+        <LegendRow account={account} window={window} color={color} now={now} index={index} />
+      )}
       {account.redeem ? (
         <RedeemableSegmentPopup
           account={account}
