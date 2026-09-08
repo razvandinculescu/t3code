@@ -553,22 +553,26 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
 export function UsageLimitsPooled({
   presentations,
   now,
+  renderAccounts,
 }: {
   readonly presentations: Parameters<typeof collectLimitAccounts>[0];
   readonly now: number;
+  /** Optional account layout; collection, notices and the pooled view stay shared. */
+  readonly renderAccounts?: (accounts: readonly LimitAccount[]) => ReactNode;
 }) {
-  const pools = collectLimitPools(collectLimitAccounts(presentations, now), now);
+  const accounts = collectLimitAccounts(presentations, now);
+  const pools = renderAccounts ? [] : collectLimitPools(accounts, now);
   const notices = collectLimitNotices(presentations, now);
   return (
     <div className="flex flex-col gap-8">
-      {pools.length === 0 ? (
+      {accounts.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No provider on the selected environments reports subscription limits.
         </p>
       ) : null}
-      {pools.map((pool) => (
-        <PoolSection key={pool.driver} pool={pool} now={now} />
-      ))}
+      {renderAccounts
+        ? renderAccounts(accounts)
+        : pools.map((pool) => <PoolSection key={pool.driver} pool={pool} now={now} />)}
       <LimitNotices notices={notices} />
     </div>
   );

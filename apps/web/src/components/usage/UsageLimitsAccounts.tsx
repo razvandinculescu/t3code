@@ -1,13 +1,13 @@
 import {
   collectLimitAccounts,
-  collectLimitNotices,
+  type LimitAccount,
   collectLimitPools,
   formatResetsIn,
 } from "@t3tools/shared/usageLimits";
 import { TicketIcon } from "lucide-react";
 
 import { barColor, PaceIcon } from "./UsageLimits";
-import { AccountAvatar, AccountName, PoolSegment } from "./UsageLimitsPooled";
+import { AccountAvatar, AccountName, PoolSegment, UsageLimitsPooled } from "./UsageLimitsPooled";
 
 /** Keep account layout separate from upstream quota calculation and reset actions. */
 export function UsageLimitsAccounts({
@@ -17,15 +17,24 @@ export function UsageLimitsAccounts({
   readonly presentations: Parameters<typeof collectLimitAccounts>[0];
   readonly now: number;
 }) {
-  const accounts = collectLimitAccounts(presentations, now);
-  const notices = collectLimitNotices(presentations, now);
   return (
-    <div className="@container flex flex-col gap-5">
-      {accounts.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No provider on the selected environments reports subscription limits.
-        </p>
-      ) : null}
+    <UsageLimitsPooled
+      presentations={presentations}
+      now={now}
+      renderAccounts={(accounts) => <AccountCards accounts={accounts} now={now} />}
+    />
+  );
+}
+
+function AccountCards({
+  accounts,
+  now,
+}: {
+  readonly accounts: readonly LimitAccount[];
+  readonly now: number;
+}) {
+  return (
+    <div className="@container">
       <div className="columns-1 gap-4 @min-[42rem]:columns-2">
         {accounts.map((account) => {
           const pool = collectLimitPools([account], now)[0];
@@ -89,13 +98,6 @@ export function UsageLimitsAccounts({
           );
         })}
       </div>
-      {notices.length > 0 ? (
-        <ul className="space-y-1 text-xs text-muted-foreground">
-          {notices.map((notice) => (
-            <li key={notice}>{notice}</li>
-          ))}
-        </ul>
-      ) : null}
     </div>
   );
 }
