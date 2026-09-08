@@ -184,6 +184,7 @@ interface ClaudeTurnState {
   readonly completed: Deferred.Deferred<void>;
   authenticationFailureMessage: string | undefined;
   rejectedRateLimitTypes: Set<string>;
+  latestAssistantRateLimited: boolean;
 }
 
 interface AssistantTextBlockState {
@@ -3612,6 +3613,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (context.turnState) {
+      // Limited retries may only carry an assistant error, without a new window
+      // event. Later parent responses replace this evidence if the turn recovers.
+      context.turnState.latestAssistantRateLimited = message.error === "rate_limit";
       // The CLI can report authentication failure before ending the turn as a
       // generic API error, so retain that evidence for the result fallback.
       if (message.error === "authentication_failed") {
@@ -3650,7 +3654,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const turn = context.turnState;
     const failureHint =
       turn?.authenticationFailureMessage ??
-      (turn && turn.rejectedRateLimitTypes.size > 0
+      (turn && (turn.rejectedRateLimitTypes.size > 0 || turn.latestAssistantRateLimited)
         ? "Claude usage limit reached. Send the message again once the limit resets."
         : undefined);
     const { status, errorMessage } = resultOutcome(message, failureHint);
@@ -3768,6 +3772,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       nextSyntheticAssistantBlockIndex: -1,
       authenticationFailureMessage: undefined,
       rejectedRateLimitTypes: new Set(),
+      latestAssistantRateLimited: false,
     };
     context.session = {
       ...context.session,
@@ -5475,6 +5480,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         nextSyntheticAssistantBlockIndex: -1,
         authenticationFailureMessage: undefined,
         rejectedRateLimitTypes: new Set(),
+        latestAssistantRateLimited: false,
       };
 
       const updatedAt = yield* nowIso;
