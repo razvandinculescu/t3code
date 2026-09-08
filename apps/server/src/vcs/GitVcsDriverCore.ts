@@ -45,6 +45,9 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const WORKTREE_ADD_TIMEOUT_MS = 300_000;
 const WORKTREE_REMOVE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
+// Status and numstat enumerate the whole working tree. Large vendor updates
+// exceed the command default even though no file contents are included.
+const STATUS_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
 const PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES = 49_000;
 const RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
@@ -1625,6 +1628,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       cwd,
       ["status", "--porcelain=2", "--branch"],
       {
+        maxOutputBytes: STATUS_MAX_OUTPUT_BYTES,
         allowNonZeroExit: true,
       },
     ).pipe(
@@ -1665,22 +1669,25 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           "GitVcsDriver.statusDetails.numstat",
           cwd,
           ["diff", "HEAD", "--numstat", "--"],
-          { allowNonZeroExit: true },
+          { allowNonZeroExit: true, maxOutputBytes: STATUS_MAX_OUTPUT_BYTES },
         ).pipe(
           Effect.flatMap((result) => {
             if (result.exitCode === 0) return Effect.succeed(result.stdout);
             if (isUnbornHeadStderr(result.stderr)) {
               return Effect.map(
                 Effect.all([
-                  runGitStdout("GitVcsDriver.statusDetails.numstat.unborn", cwd, [
-                    "diff",
-                    "--numstat",
-                  ]),
-                  runGitStdout("GitVcsDriver.statusDetails.numstat.unborn.staged", cwd, [
-                    "diff",
-                    "--cached",
-                    "--numstat",
-                  ]),
+                  executeGitWithStableDiagnostics(
+                    "GitVcsDriver.statusDetails.numstat.unborn",
+                    cwd,
+                    ["diff", "--numstat"],
+                    { maxOutputBytes: STATUS_MAX_OUTPUT_BYTES },
+                  ).pipe(Effect.map((result) => result.stdout)),
+                  executeGitWithStableDiagnostics(
+                    "GitVcsDriver.statusDetails.numstat.unborn.staged",
+                    cwd,
+                    ["diff", "--cached", "--numstat"],
+                    { maxOutputBytes: STATUS_MAX_OUTPUT_BYTES },
+                  ).pipe(Effect.map((result) => result.stdout)),
                 ]),
                 ([unstagedStdout, stagedStdout]) => {
                   const staged = parseNumstatEntries(stagedStdout);

@@ -1030,6 +1030,67 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    for (const unborn of [false, true]) {
+      it.effect(
+        `preserves large status and numstat output (${unborn ? "unborn" : "committed"} HEAD)`,
+        () =>
+          Effect.gen(function* () {
+            const cwd = yield* makeTmpDir();
+            if (unborn) yield* git(cwd, ["init"]);
+            else yield* initRepoWithCommit(cwd);
+            const paths = Array.from(
+              { length: 12_000 },
+              (_, index) =>
+                `.repos/vendor/${"long-directory/".repeat(6)}file-${String(index).padStart(5, "0")}.ts`,
+            );
+            const statusOutput =
+              "# branch.head main\n" +
+              paths
+                .map(
+                  (path) =>
+                    `1 A. N... 000000 100644 100644 ${"0".repeat(40)} ${"1".repeat(40)} ${path}\n`,
+                )
+                .join("");
+            const numstatOutput = paths.map((path) => `2\t1\t${path}\n`).join("");
+            assert.isAbove(Buffer.byteLength(statusOutput), 1_000_000);
+            assert.isAbove(Buffer.byteLength(numstatOutput), 1_000_000);
+            const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+            const spawner = ChildProcessSpawner.make((command) => {
+              if (ChildProcess.isStandardCommand(command)) {
+                if (command.args.includes("--porcelain=2")) {
+                  return Effect.succeed(makeSuccessfulHandle(statusOutput));
+                }
+                if (
+                  command.args.includes("--numstat") &&
+                  !(unborn && command.args.includes("HEAD"))
+                ) {
+                  return Effect.succeed(
+                    makeSuccessfulHandle(
+                      unborn && !command.args.includes("--cached") ? "" : numstatOutput,
+                    ),
+                  );
+                }
+              }
+              return delegate.spawn(command);
+            });
+            const driver = yield* makeGitVcsDriverCore().pipe(
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              Effect.provide(ServerConfigLayer),
+            );
+            const status = yield* driver.statusDetailsLocal(cwd);
+            assert.equal(status.hasWorkingTreeChanges, true);
+            assert.deepEqual(
+              status.workingTree.files,
+              paths.map((path) => ({
+                path,
+                insertions: 2,
+                deletions: 1,
+              })),
+            );
+          }),
+      );
+    }
+
     it.effect("reports changes to a file named HEAD", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
