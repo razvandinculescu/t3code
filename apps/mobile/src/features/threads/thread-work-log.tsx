@@ -36,6 +36,7 @@ import { cn } from "../../lib/cn";
 import { THREAD_WORK_ROW_MIN_HEIGHT, type deriveThreadWorkLogSizing } from "../../lib/layout";
 import {
   type AgentSpawnSummary,
+  resolveThreadWorkGroupUsesNestedScroller,
   resolveThreadWorkRowExpanded,
   resolveThreadWorkRowFixedSize,
   type ThreadFeedActivity,
@@ -462,9 +463,16 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
     return null;
   }
 
+  const usesNestedScroller =
+    props.activities[0]?.groupedToolDetail === true &&
+    resolveThreadWorkGroupUsesNestedScroller(props.activities, {
+      reasoningExpandedByDefault: props.reasoningExpandedByDefault,
+      workLogExpandedByDefault: props.workLogExpandedByDefault,
+    });
+
   return (
     <View className="-mx-1 mb-1 px-1 py-0">
-      {props.activities[0]?.groupedToolDetail ? (
+      {usesNestedScroller ? (
         <ThreadWorkGroupList
           key={`${props.reasoningExpandedByDefault ? 1 : 0}:${props.workLogExpandedByDefault ? 1 : 0}`}
           activities={props.activities}

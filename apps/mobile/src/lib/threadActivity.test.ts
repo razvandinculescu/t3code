@@ -21,6 +21,7 @@ import {
   isPendingUserInputOptionSelected,
   resolveThreadWorkRowExpanded,
   resolveThreadWorkRowFixedSize,
+  resolveThreadWorkGroupUsesNestedScroller,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
   workEntryRowLabel,
@@ -2549,6 +2550,30 @@ describe("buildThreadFeed", () => {
         1,
       ),
     ).toBe(33);
+    expect(
+      resolveThreadWorkGroupUsesNestedScroller([reasoningActivity], {
+        reasoningExpandedByDefault: false,
+        workLogExpandedByDefault: false,
+      }),
+    ).toBe(true);
+    expect(
+      resolveThreadWorkGroupUsesNestedScroller([reasoningActivity], {
+        reasoningExpandedByDefault: true,
+        workLogExpandedByDefault: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveThreadWorkGroupUsesNestedScroller(
+        [activity("tool-no-nested-scroll", "command_execution")],
+        { reasoningExpandedByDefault: false, workLogExpandedByDefault: true },
+      ),
+    ).toBe(false);
+    expect(
+      resolveThreadWorkGroupUsesNestedScroller(
+        [activity("tool-keeps-manual-scroller", "command_execution")],
+        { reasoningExpandedByDefault: true, workLogExpandedByDefault: false },
+      ),
+    ).toBe(true);
     expect(deriveThreadFeedPresentation(reasoningFeed, null, new Set())).toMatchObject([
       { type: "turn-fold", expanded: false },
     ]);

@@ -1900,6 +1900,20 @@ export function resolveThreadWorkRowFixedSize(
     : fixedRowHeight + trailingGap;
 }
 
+export function resolveThreadWorkGroupUsesNestedScroller(
+  activities: ReadonlyArray<Pick<ThreadFeedActivity, "workEntry">>,
+  defaults: {
+    readonly reasoningExpandedByDefault: boolean;
+    readonly workLogExpandedByDefault: boolean;
+  },
+): boolean {
+  return !(
+    defaults.workLogExpandedByDefault ||
+    (defaults.reasoningExpandedByDefault &&
+      activities.some((activity) => activity.workEntry.itemType === "reasoning"))
+  );
+}
+
 function thinkingRow(createdAt: string, turnId: TurnId | null) {
   if (cachedThinkingRow?.createdAt !== createdAt || cachedThinkingRow.turnId !== turnId) {
     cachedThinkingRow = { type: "thinking", id: LIVE_ACTIVITY_ROW_ID, createdAt, turnId };
