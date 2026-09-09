@@ -576,11 +576,32 @@ function ConfiguredSettingsRouteScreen() {
 }
 
 function GeneralSettingsSection() {
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const reasoningExpandedByDefault =
+    AsyncResult.isSuccess(preferences) && preferences.value.reasoningExpandedByDefault === true;
+  const workLogExpandedByDefault =
+    AsyncResult.isSuccess(preferences) && preferences.value.workLogExpandedByDefault === true;
+
   return (
     <SettingsSection title="General">
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
       <AutoSettleSettingsRows />
       <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
+      <SettingsSwitchRow
+        icon="brain"
+        label="Expand Thinking Blocks"
+        subtitle="Keep reasoning visible and open after a response finishes"
+        value={reasoningExpandedByDefault}
+        onValueChange={(value) => savePreferences({ reasoningExpandedByDefault: value })}
+      />
+      <SettingsSwitchRow
+        icon="slider.horizontal.3"
+        label="Expand Work Logs"
+        subtitle="Show every work row and its details"
+        value={workLogExpandedByDefault}
+        onValueChange={(value) => savePreferences({ workLogExpandedByDefault: value })}
+      />
     </SettingsSection>
   );
 }

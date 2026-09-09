@@ -1621,7 +1621,12 @@ interface ThreadFeedTurnFold {
 function deriveThreadFeedTurnFolds(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestTurn: ThreadFeedLatestTurn | null,
+  reasoningExpandedByDefault: boolean,
+  workLogExpandedByDefault: boolean,
 ): ReadonlyMap<string, ThreadFeedTurnFold> {
+  if (workLogExpandedByDefault) {
+    return new Map();
+  }
   const firstAssistantMessageIdByTurn = new Map<TurnId, string>();
   const terminalAssistantMessageIdByTurn = new Map<TurnId, string>();
   for (const entry of feed) {
@@ -1683,6 +1688,12 @@ function deriveThreadFeedTurnFolds(
         .filter(
           (entry) =>
             entry.id !== firstAssistantMessageId && entry.id !== terminalAssistantMessageId,
+        )
+        .filter(
+          (entry) =>
+            !reasoningExpandedByDefault ||
+            entry.type !== "activity-group" ||
+            !entry.activities.some((activity) => activity.workEntry.itemType === "reasoning"),
         )
         .map((entry) => entry.id),
     );
@@ -1748,6 +1759,11 @@ export function deriveThreadFeedPresentation(
   expandedTurnIds: ReadonlySet<TurnId>,
   expandedWorkGroupIds: ReadonlySet<string> = new Set(),
   activeWorkStartedAt: string | null = null,
+  options: {
+    readonly collapsedWorkGroupIds?: ReadonlySet<string>;
+    readonly reasoningExpandedByDefault?: boolean;
+    readonly workLogExpandedByDefault?: boolean;
+  } = {},
 ): ThreadFeedEntry[] {
   const sourceFeed = feed.filter(
     (entry) =>
@@ -1759,7 +1775,15 @@ export function deriveThreadFeedPresentation(
   const activeTailGroup = sourceFeed.findLast(
     (entry) => entry.type !== "message" || !isEmptyMessage(entry),
   );
-  const foldsByAnchorId = deriveThreadFeedTurnFolds(sourceFeed, latestTurn);
+  const reasoningExpandedByDefault = options.reasoningExpandedByDefault === true;
+  const workLogExpandedByDefault = options.workLogExpandedByDefault === true;
+  const collapsedWorkGroupIds = options.collapsedWorkGroupIds ?? new Set<string>();
+  const foldsByAnchorId = deriveThreadFeedTurnFolds(
+    sourceFeed,
+    latestTurn,
+    reasoningExpandedByDefault,
+    workLogExpandedByDefault,
+  );
   const unsettledTurnId = deriveUnsettledTurnId(latestTurn);
   const isWorking = activeWorkStartedAt !== null;
   const collapsedEntryIds = new Set<string>();
@@ -1808,9 +1832,12 @@ export function deriveThreadFeedPresentation(
         result,
         entry,
         expandedWorkGroupIds,
+        collapsedWorkGroupIds,
         unsettledTurnId,
         isWorking,
         isActiveTailGroup,
+        reasoningExpandedByDefault,
+        workLogExpandedByDefault,
       );
     }
   }
@@ -1843,6 +1870,21 @@ export function deriveThreadFeedPresentation(
  */
 export const LIVE_ACTIVITY_ROW_ID = "live-activity-row";
 
+export function resolveThreadWorkRowExpanded(
+  activity: Pick<ThreadFeedActivity, "workEntry">,
+  override: boolean | undefined,
+  defaults: {
+    readonly reasoningExpandedByDefault: boolean;
+    readonly workLogExpandedByDefault: boolean;
+  },
+): boolean {
+  return (
+    override ??
+    (defaults.workLogExpandedByDefault ||
+      (defaults.reasoningExpandedByDefault && activity.workEntry.itemType === "reasoning"))
+  );
+}
+
 function thinkingRow(createdAt: string, turnId: TurnId | null) {
   if (cachedThinkingRow?.createdAt !== createdAt || cachedThinkingRow.turnId !== turnId) {
     cachedThinkingRow = { type: "thinking", id: LIVE_ACTIVITY_ROW_ID, createdAt, turnId };
@@ -1854,9 +1896,12 @@ function appendPresentedFeedEntry(
   result: ThreadFeedEntry[],
   entry: Exclude<ThreadFeedEntry, { readonly type: "turn-fold" | "work-toggle" | "thinking" }>,
   expandedWorkGroupIds: ReadonlySet<string>,
+  collapsedWorkGroupIds: ReadonlySet<string>,
   unsettledTurnId: TurnId | null,
   isWorking: boolean,
   activeTail: boolean,
+  reasoningExpandedByDefault: boolean,
+  workLogExpandedByDefault: boolean,
 ): void {
   if (entry.type !== "activity-group") {
     result.push(entry);
@@ -1875,8 +1920,24 @@ function appendPresentedFeedEntry(
     cached.activeTail !== activeTail ||
     cached.rows.some(
       (row) =>
-        (row.type === "work-toggle" && expandedWorkGroupIds.has(row.groupId) !== row.expanded) ||
-        (row.type === "agent-spawn" && expandedWorkGroupIds.has(row.id) !== row.expanded),
+        (row.type === "work-toggle" &&
+          resolveWorkGroupExpanded(
+            row.groupId,
+            entry.activities,
+            expandedWorkGroupIds,
+            collapsedWorkGroupIds,
+            reasoningExpandedByDefault,
+            workLogExpandedByDefault,
+          ) !== row.expanded) ||
+        (row.type === "agent-spawn" &&
+          resolveWorkGroupExpanded(
+            row.id,
+            [row.activity],
+            expandedWorkGroupIds,
+            collapsedWorkGroupIds,
+            false,
+            workLogExpandedByDefault,
+          ) !== row.expanded),
     )
   ) {
     const rows: ThreadFeedEntry[] = [];
@@ -1884,9 +1945,12 @@ function appendPresentedFeedEntry(
       rows,
       entry,
       expandedWorkGroupIds,
+      collapsedWorkGroupIds,
       unsettledTurnId,
       isWorking,
       activeTail,
+      reasoningExpandedByDefault,
+      workLogExpandedByDefault,
     );
     cached = { unsettledTurnId, isWorking, activeTail, rows };
     presentedActivityGroupsCache.set(entry, cached);
@@ -1900,9 +1964,12 @@ function appendActivityGroupRows(
   result: ThreadFeedEntry[],
   entry: ThreadFeedActivityGroup,
   expandedWorkGroupIds: ReadonlySet<string>,
+  collapsedWorkGroupIds: ReadonlySet<string>,
   unsettledTurnId: TurnId | null,
   isWorking: boolean,
   activeTail: boolean,
+  reasoningExpandedByDefault: boolean,
+  workLogExpandedByDefault: boolean,
 ): void {
   const activities = omitSupersededLifecycleMarkers(
     entry.activities.filter(
@@ -1925,9 +1992,12 @@ function appendActivityGroupRows(
       entry,
       groupableRun,
       expandedWorkGroupIds,
+      collapsedWorkGroupIds,
       unsettledTurnId,
       isWorking,
       activeTail && isTrailingRun,
+      reasoningExpandedByDefault,
+      workLogExpandedByDefault,
     );
     groupableRun = [];
   };
@@ -1948,7 +2018,14 @@ function appendActivityGroupRows(
         createdAt: activity.createdAt,
         turnId: activity.turnId,
         activity,
-        expanded: expandedWorkGroupIds.has(groupId),
+        expanded: resolveWorkGroupExpanded(
+          groupId,
+          [activity],
+          expandedWorkGroupIds,
+          collapsedWorkGroupIds,
+          false,
+          workLogExpandedByDefault,
+        ),
         summary: agentSpawnSummary(spawn, activity.lifecycleStatus),
       });
       continue;
@@ -1969,16 +2046,26 @@ function appendToolGroupRows(
   sourceGroup: Extract<ThreadFeedEntry, { readonly type: "activity-group" }>,
   activities: ReadonlyArray<ThreadFeedActivity>,
   expandedWorkGroupIds: ReadonlySet<string>,
+  collapsedWorkGroupIds: ReadonlySet<string>,
   unsettledTurnId: TurnId | null,
   isWorking: boolean,
   activeTail: boolean,
+  reasoningExpandedByDefault: boolean,
+  workLogExpandedByDefault: boolean,
 ): void {
   const firstEntry = activities[0]!.workEntry;
   const identity = firstEntry.toolCallId
     ? `tool:${firstEntry.turnId ?? "no-turn"}:${firstEntry.toolCallId}`
     : activities[0]!.id;
   const groupId = `work-group:${identity}`;
-  const expanded = expandedWorkGroupIds.has(groupId);
+  const expanded = resolveWorkGroupExpanded(
+    groupId,
+    activities,
+    expandedWorkGroupIds,
+    collapsedWorkGroupIds,
+    reasoningExpandedByDefault,
+    workLogExpandedByDefault,
+  );
   const latestActiveActivity = activities.findLast(
     (activity) =>
       isWorking &&
@@ -2073,6 +2160,23 @@ function appendToolGroupRows(
         activity.turnId === unsettledTurnId,
     })),
   });
+}
+
+function resolveWorkGroupExpanded(
+  groupId: string,
+  activities: ReadonlyArray<ThreadFeedActivity>,
+  expandedWorkGroupIds: ReadonlySet<string>,
+  collapsedWorkGroupIds: ReadonlySet<string>,
+  reasoningExpandedByDefault: boolean,
+  workLogExpandedByDefault: boolean,
+): boolean {
+  if (expandedWorkGroupIds.has(groupId)) return true;
+  if (collapsedWorkGroupIds.has(groupId)) return false;
+  return (
+    workLogExpandedByDefault ||
+    (reasoningExpandedByDefault &&
+      activities.some((activity) => activity.workEntry.itemType === "reasoning"))
+  );
 }
 
 function liveToolActivitySummary(activity: ThreadFeedActivity, presentTense: boolean): string {

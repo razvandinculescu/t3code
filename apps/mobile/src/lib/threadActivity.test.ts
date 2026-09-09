@@ -19,6 +19,7 @@ import {
   buildThreadFeed,
   deriveThreadFeedPresentation,
   isPendingUserInputOptionSelected,
+  resolveThreadWorkRowExpanded,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
   workEntryRowLabel,
@@ -2477,6 +2478,96 @@ describe("buildThreadFeed", () => {
     expect(unchanged[0]).toBe(expanded[0]);
     expect(unchanged[1]).toBe(expanded[1]);
     expect(deriveThreadFeedPresentation(feed, null, new Set())).toEqual(collapsed);
+  });
+
+  it("applies mobile reasoning and work-log expansion defaults with manual collapse overrides", () => {
+    const turnId = TurnId.make("turn-expansion-defaults");
+    const activity = (
+      id: string,
+      itemType: "reasoning" | "command_execution",
+    ): ThreadFeedActivity => ({
+      id,
+      createdAt: "2026-04-01T00:00:01.000Z",
+      turnId,
+      summary: itemType === "reasoning" ? "Reasoning" : "Ran command",
+      detail: "Full detail",
+      canExpand: true,
+      getFullDetail: () => "Full detail",
+      getCopyText: () => "Full detail",
+      icon: itemType === "reasoning" ? "brain" : "command",
+      toolLike: itemType === "command_execution",
+      status: null,
+      workEntry: {
+        id,
+        createdAt: "2026-04-01T00:00:01.000Z",
+        turnId,
+        label: itemType === "reasoning" ? "Reasoning" : "Ran command",
+        itemType,
+        tone: "tool",
+      },
+    });
+    const feedFor = (row: ThreadFeedActivity): ThreadFeedEntry[] => [
+      {
+        type: "activity-group",
+        id: `activity-group:${row.id}`,
+        createdAt: row.createdAt,
+        turnId,
+        activities: [row],
+      },
+    ];
+
+    const reasoningActivity = activity("reasoning-1", "reasoning");
+    const reasoningFeed = feedFor(reasoningActivity);
+    expect(
+      resolveThreadWorkRowExpanded(reasoningActivity, undefined, {
+        reasoningExpandedByDefault: true,
+        workLogExpandedByDefault: false,
+      }),
+    ).toBe(true);
+    expect(
+      resolveThreadWorkRowExpanded(reasoningActivity, false, {
+        reasoningExpandedByDefault: true,
+        workLogExpandedByDefault: true,
+      }),
+    ).toBe(false);
+    expect(deriveThreadFeedPresentation(reasoningFeed, null, new Set())).toMatchObject([
+      { type: "turn-fold", expanded: false },
+    ]);
+    const expandedReasoning = deriveThreadFeedPresentation(
+      reasoningFeed,
+      null,
+      new Set(),
+      new Set(),
+      null,
+      { reasoningExpandedByDefault: true },
+    );
+    expect(expandedReasoning).toMatchObject([
+      { type: "work-toggle", expanded: true },
+      {
+        type: "activity-group",
+        activities: [{ id: "reasoning-1", groupedToolDetail: true }],
+      },
+    ]);
+
+    const toolFeed = feedFor(activity("tool-1", "command_execution"));
+    const expandedWorkLog = deriveThreadFeedPresentation(
+      toolFeed,
+      null,
+      new Set(),
+      new Set(),
+      null,
+      { workLogExpandedByDefault: true },
+    );
+    expect(expandedWorkLog).toMatchObject([
+      { type: "work-toggle", groupId: "work-group:tool-1", expanded: true },
+      { type: "activity-group", activities: [{ id: "tool-1", groupedToolDetail: true }] },
+    ]);
+    expect(
+      deriveThreadFeedPresentation(toolFeed, null, new Set(), new Set(), null, {
+        collapsedWorkGroupIds: new Set(["work-group:tool-1"]),
+        workLogExpandedByDefault: true,
+      }),
+    ).toMatchObject([{ type: "work-toggle", expanded: false }]);
   });
 
   it.each(

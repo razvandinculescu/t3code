@@ -36,6 +36,7 @@ import { cn } from "../../lib/cn";
 import { THREAD_WORK_ROW_MIN_HEIGHT, type deriveThreadWorkLogSizing } from "../../lib/layout";
 import {
   type AgentSpawnSummary,
+  resolveThreadWorkRowExpanded,
   type ThreadFeedActivity,
   workEntryRowLabel,
 } from "../../lib/threadActivity";
@@ -405,6 +406,8 @@ interface ThreadWorkLogProps {
   readonly environmentId: EnvironmentId;
   readonly copiedRowId: string | null;
   readonly expandedRows: Readonly<Record<string, boolean>>;
+  readonly reasoningExpandedByDefault: boolean;
+  readonly workLogExpandedByDefault: boolean;
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
   readonly scrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
   readonly iconSubtleColor: ColorValue;
@@ -412,27 +415,33 @@ interface ThreadWorkLogProps {
   readonly edgeFadeColor: string;
   readonly themeAppearance: "light" | "dark";
   readonly onCopyRow: (rowId: string, value: string) => void;
-  readonly onToggleRow: (rowId: string, anchorKey: string) => void;
+  readonly onToggleRow: (rowId: string, anchorKey: string, expanded: boolean) => void;
   readonly renderImage: MarkdownImageRenderer;
 }
 
 export function ThreadWorkLog(props: ThreadWorkLogProps) {
   const renderRow = useCallback(
-    (row: ThreadFeedActivity) => (
-      <ThreadWorkLogRow
-        key={row.id}
-        row={row}
-        anchorKey={props.anchorKey}
-        copied={props.copiedRowId === row.id}
-        expanded={props.expandedRows[row.id] ?? false}
-        environmentId={props.environmentId}
-        iconSubtleColor={props.iconSubtleColor}
-        onCopyRow={props.onCopyRow}
-        onToggleRow={props.onToggleRow}
-        renderImage={props.renderImage}
-        themeAppearance={props.themeAppearance}
-      />
-    ),
+    (row: ThreadFeedActivity) => {
+      const expanded = resolveThreadWorkRowExpanded(row, props.expandedRows[row.id], {
+        reasoningExpandedByDefault: props.reasoningExpandedByDefault,
+        workLogExpandedByDefault: props.workLogExpandedByDefault,
+      });
+      return (
+        <ThreadWorkLogRow
+          key={row.id}
+          row={row}
+          anchorKey={props.anchorKey}
+          copied={props.copiedRowId === row.id}
+          expanded={expanded}
+          environmentId={props.environmentId}
+          iconSubtleColor={props.iconSubtleColor}
+          onCopyRow={props.onCopyRow}
+          onToggleRow={props.onToggleRow}
+          renderImage={props.renderImage}
+          themeAppearance={props.themeAppearance}
+        />
+      );
+    },
     [
       props.anchorKey,
       props.copiedRowId,
@@ -441,8 +450,10 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
       props.iconSubtleColor,
       props.onCopyRow,
       props.onToggleRow,
+      props.reasoningExpandedByDefault,
       props.renderImage,
       props.themeAppearance,
+      props.workLogExpandedByDefault,
     ],
   );
 
@@ -724,8 +735,10 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
     | "copiedRowId"
     | "edgeFadeColor"
     | "expandedRows"
+    | "reasoningExpandedByDefault"
     | "rowSizing"
     | "scrollPositions"
+    | "workLogExpandedByDefault"
   > & {
     readonly row: ThreadFeedActivity;
     readonly copied: boolean;
@@ -763,7 +776,7 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
         onPress={() => {
           if (canExpand) {
             void Haptics.selectionAsync();
-            props.onToggleRow(row.id, props.anchorKey);
+            props.onToggleRow(row.id, props.anchorKey, expanded);
           }
         }}
         onLongPress={() => props.onCopyRow(row.id, row.getCopyText())}

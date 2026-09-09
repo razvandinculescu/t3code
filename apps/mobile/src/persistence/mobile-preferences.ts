@@ -42,6 +42,10 @@ export interface Preferences {
   readonly legacyThreadListEnabled?: boolean;
   /** Device-local counterpart of desktop's `planModeEnabled` legacy flag. */
   readonly planModeEnabled?: boolean;
+  /** Keep reasoning rows visible and open instead of folding them into settled turns. */
+  readonly reasoningExpandedByDefault?: boolean;
+  /** Keep settled work logs, their groups, and row details open. */
+  readonly workLogExpandedByDefault?: boolean;
   /** Fresh keys reset both shelves to collapsed when users update. */
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;
@@ -103,6 +107,8 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     projectGroupingMode?: SidebarProjectGroupingMode;
     legacyThreadListEnabled?: boolean;
     planModeEnabled?: boolean;
+    reasoningExpandedByDefault?: boolean;
+    workLogExpandedByDefault?: boolean;
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
   } = {};
@@ -174,6 +180,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.planModeEnabled === "boolean") {
     preferences.planModeEnabled = parsed.planModeEnabled;
+  }
+  if (typeof parsed.reasoningExpandedByDefault === "boolean") {
+    preferences.reasoningExpandedByDefault = parsed.reasoningExpandedByDefault;
+  }
+  if (typeof parsed.workLogExpandedByDefault === "boolean") {
+    preferences.workLogExpandedByDefault = parsed.workLogExpandedByDefault;
   }
   if (typeof parsed.threadListSettledShelfExpanded === "boolean") {
     preferences.threadListSettledShelfExpanded = parsed.threadListSettledShelfExpanded;

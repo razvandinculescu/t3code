@@ -204,6 +204,18 @@ describe("mobile connection storage", () => {
     await expect(loadPreferences()).resolves.toEqual({ ...themes, lightThemeId: "t3-chat" });
   });
 
+  it("persists the mobile work-log expansion preferences", async () => {
+    await savePreferencesPatch({
+      reasoningExpandedByDefault: true,
+      workLogExpandedByDefault: true,
+    });
+
+    await expect(loadPreferences()).resolves.toEqual({
+      reasoningExpandedByDefault: true,
+      workLogExpandedByDefault: true,
+    });
+  });
+
   it("persists the Material You layout independently of the selected theme", async () => {
     await savePreferencesPatch({
       lightThemeId: "material-you",

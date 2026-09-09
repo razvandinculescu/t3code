@@ -1,4 +1,5 @@
 import * as Haptics from "expo-haptics";
+import { useAtomValue } from "@effect/atom-react";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
 import type {
@@ -74,6 +75,7 @@ import { PresentationSource } from "../../components/NativePresentation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, LinearTransition, type SharedValue } from "react-native-reanimated";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -140,6 +142,7 @@ import {
 import {
   deriveThreadFeedPresentation,
   isContextCompactionActivityGroup,
+  resolveThreadWorkRowExpanded,
   type ThreadFeedEntry,
   type ThreadFeedLatestTurn,
 } from "../../lib/threadActivity";
@@ -170,6 +173,7 @@ import {
 } from "../../state/assets";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { usePreparedConnection } from "../../state/session";
+import { mobilePreferencesAtom } from "../../state/preferences";
 import * as Option from "effect/Option";
 import {
   basename,
@@ -1337,8 +1341,8 @@ function renderFeedEntry(
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
     readonly unsettledTurnId: TurnId | null;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
-    readonly onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
-    readonly onToggleWorkRow: (rowId: string, anchorKey: string) => void;
+    readonly onToggleWorkGroup: (groupId: string, anchorKey: string, expanded: boolean) => void;
+    readonly onToggleWorkRow: (rowId: string, anchorKey: string, expanded: boolean) => void;
     readonly onToggleTurnFold: (turnId: TurnId) => void;
     readonly onPressPreview: (source: FilePreviewSource) => void;
     readonly onPressVideo: (attachment: ChatFileAttachment, sourceIdentifier: string) => void;
@@ -1355,6 +1359,8 @@ function renderFeedEntry(
     readonly userBubbleMaxWidth: number;
     /** Width assistant markdown lays out in, so images can size their frame before layout. */
     readonly markdownContentWidth: number;
+    readonly reasoningExpandedByDefault: boolean;
+    readonly workLogExpandedByDefault: boolean;
   },
 ) {
   const entry = info.item;
@@ -1399,7 +1405,7 @@ function renderFeedEntry(
         expanded={entry.expanded}
         iconSubtleColor={iconSubtleColor}
         rowSizing={props.workRowSizing}
-        onToggle={() => props.onToggleWorkGroup(entry.id, entry.id)}
+        onToggle={() => props.onToggleWorkGroup(entry.id, entry.id, entry.expanded)}
         onCopy={() => props.onCopyWorkRow(entry.activity.id, entry.activity.getCopyText())}
       />
     );
@@ -1421,7 +1427,7 @@ function renderFeedEntry(
         summaryToolIcon={entry.summaryToolIcon}
         hasFailure={entry.hasFailure}
         shimmer={entry.shimmer}
-        onToggle={() => props.onToggleWorkGroup(entry.groupId, entry.id)}
+        onToggle={() => props.onToggleWorkGroup(entry.groupId, entry.id, entry.expanded)}
       />
     );
   }
@@ -1657,11 +1663,13 @@ function renderFeedEntry(
       anchorKey={entry.id}
       copiedRowId={props.copiedRowId}
       expandedRows={props.expandedWorkRows}
+      reasoningExpandedByDefault={props.reasoningExpandedByDefault}
       rowSizing={props.workRowSizing}
       scrollPositions={props.workGroupScrollPositions}
       iconSubtleColor={iconSubtleColor}
       edgeFadeColor={props.screenColor}
       themeAppearance={props.themeAppearance}
+      workLogExpandedByDefault={props.workLogExpandedByDefault}
       onCopyRow={props.onCopyWorkRow}
       onToggleRow={props.onToggleWorkRow}
       renderImage={props.renderViewedImage}
@@ -1951,6 +1959,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const userScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { width: windowWidth, fontScale } = useWindowDimensions();
   const { appearance } = useAppearancePreferences();
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const reasoningExpandedByDefault =
+    AsyncResult.isSuccess(preferences) && preferences.value.reasoningExpandedByDefault === true;
+  const workLogExpandedByDefault =
+    AsyncResult.isSuccess(preferences) && preferences.value.workLogExpandedByDefault === true;
   const workRowSizing = useMemo(
     () => deriveThreadWorkLogSizing({ baseFontSize: appearance.baseFontSize, fontScale }),
     [appearance.baseFontSize, fontScale],
@@ -2428,6 +2441,15 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     }
     return ids;
   }, [expandedWorkGroups]);
+  const collapsedWorkGroupIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const [groupId, expanded] of Object.entries(expandedWorkGroups)) {
+      if (!expanded) {
+        ids.add(groupId);
+      }
+    }
+    return ids;
+  }, [expandedWorkGroups]);
   const presentedFeed = useMemo(
     () =>
       appendPendingThreadMessages(
@@ -2437,6 +2459,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           expandedTurnIds,
           expandedWorkGroupIds,
           props.activeWorkStartedAt,
+          {
+            collapsedWorkGroupIds,
+            reasoningExpandedByDefault,
+            workLogExpandedByDefault,
+          },
         ),
         props.feed,
         props.queuedMessages,
@@ -2445,6 +2472,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.queuedMessages,
       expandedTurnIds,
       expandedWorkGroupIds,
+      collapsedWorkGroupIds,
+      reasoningExpandedByDefault,
+      workLogExpandedByDefault,
       props.activeWorkStartedAt,
       props.feed,
       props.latestTurn,
@@ -2600,13 +2630,13 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   }, []);
 
   const onToggleWorkGroup = useCallback(
-    (groupId: string, anchorKey: string) => {
+    (groupId: string, anchorKey: string, expanded: boolean) => {
       suspendEndScrollMaintenanceForDisclosure(anchorKey);
       setInteractionState((current) => ({
         ...current,
         expandedWorkGroups: {
           ...current.expandedWorkGroups,
-          [groupId]: !(current.expandedWorkGroups[groupId] ?? false),
+          [groupId]: !expanded,
         },
       }));
     },
@@ -2614,13 +2644,13 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
 
   const onToggleWorkRow = useCallback(
-    (rowId: string, anchorKey: string) => {
+    (rowId: string, anchorKey: string, expanded: boolean) => {
       suspendEndScrollMaintenanceForDisclosure(anchorKey);
       setInteractionState((current) => ({
         ...current,
         expandedWorkRows: {
           ...current.expandedWorkRows,
-          [rowId]: !(current.expandedWorkRows[rowId] ?? false),
+          [rowId]: !expanded,
         },
       }));
     },
@@ -2680,14 +2710,24 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           }
           // Expanded rows append a variable detail block — fall back to
           // measurement for those groups.
-          return entry.activities.some((activity) => expandedWorkRows[activity.id])
+          return entry.activities.some((activity) =>
+            resolveThreadWorkRowExpanded(activity, expandedWorkRows[activity.id], {
+              reasoningExpandedByDefault,
+              workLogExpandedByDefault,
+            }),
+          )
             ? undefined
             : collapsedWorkLogHeight(entry.activities);
         default:
           return undefined;
       }
     },
-    [expandedWorkRows, workRowSizing.fixedRowHeight],
+    [
+      expandedWorkRows,
+      reasoningExpandedByDefault,
+      workLogExpandedByDefault,
+      workRowSizing.fixedRowHeight,
+    ],
   );
 
   // Disclosures can mount existing offscreen rows as well as new work rows.
@@ -2727,6 +2767,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             themeAppearance,
             userBubbleMaxWidth,
             markdownContentWidth,
+            reasoningExpandedByDefault,
+            workLogExpandedByDefault,
             skills: props.skills,
             onUseArtifactTemplate: props.onUseArtifactTemplate,
           })}
@@ -2752,6 +2794,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       themeAppearance,
       userBubbleMaxWidth,
       markdownContentWidth,
+      reasoningExpandedByDefault,
+      workLogExpandedByDefault,
       onCopyWorkRow,
       markdownLinkHandlers,
       onPressPreview,
