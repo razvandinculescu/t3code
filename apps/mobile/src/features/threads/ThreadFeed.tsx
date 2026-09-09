@@ -1968,16 +1968,17 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     () => deriveThreadWorkLogSizing({ baseFontSize: appearance.baseFontSize, fontScale }),
     [appearance.baseFontSize, fontScale],
   );
-  const previousTextSize = useRef(workRowSizing.textSizeKey);
+  const workLogLayoutKey = `${workRowSizing.textSizeKey}:${reasoningExpandedByDefault ? 1 : 0}:${workLogExpandedByDefault ? 1 : 0}`;
+  const previousWorkLogLayoutKey = useRef(workLogLayoutKey);
   useLayoutEffect(() => {
-    if (previousTextSize.current === workRowSizing.textSizeKey) {
+    if (previousWorkLogLayoutKey.current === workLogLayoutKey) {
       return;
     }
-    previousTextSize.current = workRowSizing.textSizeKey;
-    // Text-size changes invalidate the outer list's fixed-height cache too.
-    // This never runs for scrolling, streamed output, or disclosure toggles.
+    previousWorkLogLayoutKey.current = workLogLayoutKey;
+    // Text-size and default-disclosure changes both invalidate fixed-height
+    // assumptions made by the outer feed before mobile preferences hydrate.
     props.listRef.current?.clearCaches({ mode: "sizes" });
-  }, [workRowSizing.textSizeKey, props.listRef]);
+  }, [workLogLayoutKey, props.listRef]);
   const [viewportWidth, setViewportWidth] = useState(() =>
     props.layoutVariant === "split" ? 0 : windowWidth,
   );

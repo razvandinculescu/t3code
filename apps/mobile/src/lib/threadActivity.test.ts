@@ -20,6 +20,7 @@ import {
   deriveThreadFeedPresentation,
   isPendingUserInputOptionSelected,
   resolveThreadWorkRowExpanded,
+  resolveThreadWorkRowFixedSize,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
   workEntryRowLabel,
@@ -2530,6 +2531,24 @@ describe("buildThreadFeed", () => {
         workLogExpandedByDefault: true,
       }),
     ).toBe(false);
+    expect(
+      resolveThreadWorkRowFixedSize(
+        reasoningActivity,
+        undefined,
+        { reasoningExpandedByDefault: true, workLogExpandedByDefault: false },
+        32,
+        1,
+      ),
+    ).toBeUndefined();
+    expect(
+      resolveThreadWorkRowFixedSize(
+        reasoningActivity,
+        false,
+        { reasoningExpandedByDefault: true, workLogExpandedByDefault: true },
+        32,
+        1,
+      ),
+    ).toBe(33);
     expect(deriveThreadFeedPresentation(reasoningFeed, null, new Set())).toMatchObject([
       { type: "turn-fold", expanded: false },
     ]);

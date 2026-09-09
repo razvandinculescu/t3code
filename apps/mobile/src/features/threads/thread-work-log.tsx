@@ -37,6 +37,7 @@ import { THREAD_WORK_ROW_MIN_HEIGHT, type deriveThreadWorkLogSizing } from "../.
 import {
   type AgentSpawnSummary,
   resolveThreadWorkRowExpanded,
+  resolveThreadWorkRowFixedSize,
   type ThreadFeedActivity,
   workEntryRowLabel,
 } from "../../lib/threadActivity";
@@ -465,12 +466,15 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
     <View className="-mx-1 mb-1 px-1 py-0">
       {props.activities[0]?.groupedToolDetail ? (
         <ThreadWorkGroupList
+          key={`${props.reasoningExpandedByDefault ? 1 : 0}:${props.workLogExpandedByDefault ? 1 : 0}`}
           activities={props.activities}
           edgeFadeColor={props.edgeFadeColor}
           expandedRows={props.expandedRows}
           groupId={props.anchorKey}
+          reasoningExpandedByDefault={props.reasoningExpandedByDefault}
           rowSizing={props.rowSizing}
           scrollPositions={props.scrollPositions}
+          workLogExpandedByDefault={props.workLogExpandedByDefault}
           renderRow={renderRow}
         />
       ) : (
@@ -485,8 +489,10 @@ function ThreadWorkGroupList(props: {
   readonly edgeFadeColor: string;
   readonly expandedRows: Readonly<Record<string, boolean>>;
   readonly groupId: string;
+  readonly reasoningExpandedByDefault: boolean;
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
   readonly scrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
+  readonly workLogExpandedByDefault: boolean;
   readonly renderRow: (row: ThreadFeedActivity) => ReactNode;
 }) {
   const estimatedRowsHeight = workLogRowsHeight(
@@ -619,10 +625,23 @@ function ThreadWorkGroupList(props: {
   }, []);
   const getFixedItemSize = useCallback(
     (row: ThreadFeedActivity, index: number) =>
-      props.expandedRows[row.id] || props.rowSizing.fixedRowHeight === undefined
-        ? undefined
-        : props.rowSizing.fixedRowHeight + (index < props.activities.length - 1 ? WORK_ROW_GAP : 0),
-    [props.activities.length, props.expandedRows, props.rowSizing.fixedRowHeight],
+      resolveThreadWorkRowFixedSize(
+        row,
+        props.expandedRows[row.id],
+        {
+          reasoningExpandedByDefault: props.reasoningExpandedByDefault,
+          workLogExpandedByDefault: props.workLogExpandedByDefault,
+        },
+        props.rowSizing.fixedRowHeight,
+        index < props.activities.length - 1 ? WORK_ROW_GAP : 0,
+      ),
+    [
+      props.activities.length,
+      props.expandedRows,
+      props.reasoningExpandedByDefault,
+      props.rowSizing.fixedRowHeight,
+      props.workLogExpandedByDefault,
+    ],
   );
   const renderItem = useCallback(
     ({ item, index }: { item: ThreadFeedActivity; index: number }) => (

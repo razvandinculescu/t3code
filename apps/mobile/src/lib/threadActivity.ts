@@ -1885,6 +1885,21 @@ export function resolveThreadWorkRowExpanded(
   );
 }
 
+export function resolveThreadWorkRowFixedSize(
+  activity: Pick<ThreadFeedActivity, "workEntry">,
+  override: boolean | undefined,
+  defaults: {
+    readonly reasoningExpandedByDefault: boolean;
+    readonly workLogExpandedByDefault: boolean;
+  },
+  fixedRowHeight: number | undefined,
+  trailingGap: number,
+): number | undefined {
+  return fixedRowHeight === undefined || resolveThreadWorkRowExpanded(activity, override, defaults)
+    ? undefined
+    : fixedRowHeight + trailingGap;
+}
+
 function thinkingRow(createdAt: string, turnId: TurnId | null) {
   if (cachedThinkingRow?.createdAt !== createdAt || cachedThinkingRow.turnId !== turnId) {
     cachedThinkingRow = { type: "thinking", id: LIVE_ACTIVITY_ROW_ID, createdAt, turnId };
