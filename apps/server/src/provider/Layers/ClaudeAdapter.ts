@@ -3615,8 +3615,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // an active turn (e.g., background agent/subagent responses between user prompts).
     if (!context.turnState) {
       yield* startSyntheticTurn(context, message.uuid);
-    } else if (context.turnState.synthetic && context.turnStartMessageIds.at(-1) === null) {
-      context.turnStartMessageIds[context.turnStartMessageIds.length - 1] = message.uuid;
     }
 
     const content = message.message?.content;

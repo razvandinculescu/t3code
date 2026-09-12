@@ -1639,7 +1639,7 @@ describe("ClaudeAdapterLive", () => {
 
   for (const requestingFirst of [false, true]) {
     it.effect(
-      `retains the native boundary for synthetic reasoning (requesting first: ${requestingFirst})`,
+      `preserves known and unknown boundaries for synthetic reasoning (requesting first: ${requestingFirst})`,
       () => {
         const harness = makeHarness();
         return Effect.gen(function* () {
@@ -1697,7 +1697,7 @@ describe("ClaudeAdapterLive", () => {
             resume: "sdk-session-1",
             resumeSessionAt: "assistant-bg-1",
             turnCount: 1,
-            turnStartMessageIds: ["assistant-bg-1"],
+            turnStartMessageIds: [requestingFirst ? null : "assistant-bg-1"],
           });
           const reasoningCompleted = events.find(
             (event) => event.type === "item.completed" && event.payload.itemType === "reasoning",
