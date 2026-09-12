@@ -319,6 +319,26 @@ commit a version bump to `main`. Only run it when a real nightly release is acce
 Manual `channel=stable` is also a real stable-channel release. Omitting signing secrets only makes
 platform artifacts unsigned; it does not prevent publication.
 
+## Personal macOS fork builds and Keychain access
+
+For repeated local installations, pin the SHA-1 fingerprint of an Apple Development
+certificate returned by `security find-identity -v -p codesigning`:
+
+```bash
+T3CODE_MACOS_LOCAL_SIGNING_IDENTITY=<certificate-sha1> vp run dist:desktop:dmg:arm64
+```
+
+This signs the app inside both the DMG and ZIP, fails if the certificate is unavailable,
+and does not require the distribution passkey profile or notarization credentials.
+Use the same certificate identity for subsequent builds. Run the build in the logged-in
+macOS GUI session if access to its signing key requires that session.
+
+Install the already-signed app from the artifact. Do not re-sign it with `codesign --sign -`,
+and do not preserve a previous ad-hoc designated requirement. Ad-hoc requirements contain
+the code hash, so each rebuild invalidates the application's saved Keychain approval.
+The first transition from ad-hoc to certificate signing may need one new local approval;
+subsequent builds retain the certificate-based designated requirement.
+
 ## 2) Apple signing + notarization setup (macOS)
 
 Required secrets used by the workflow:

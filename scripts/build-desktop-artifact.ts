@@ -182,6 +182,15 @@ const getDefaultArch = Effect.fn("getDefaultArch")(function* (platform: typeof B
   return yield* getDefaultBuildArch(platform, config);
 });
 
+export class InvalidLocalMacSigningIdentityError extends Schema.TaggedError<InvalidLocalMacSigningIdentityError>()(
+  "InvalidLocalMacSigningIdentityError",
+  {},
+) {
+  override get message(): string {
+    return "T3CODE_MACOS_LOCAL_SIGNING_IDENTITY must be the 40-character SHA-1 of a signing certificate, not an ad-hoc identity.";
+  }
+}
+
 export class MacPasskeySigningConfigurationResolutionError extends Schema.TaggedError<MacPasskeySigningConfigurationResolutionError>()(
   "MacPasskeySigningConfigurationResolutionError",
   {
@@ -2712,6 +2721,15 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "mac") {
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
+    const localIdentity = signed
+      ? ""
+      : (yield* Config.string("T3CODE_MACOS_LOCAL_SIGNING_IDENTITY").pipe(
+          Config.withDefault(""),
+        )).trim();
+    if (localIdentity && !/^[a-fA-F0-9]{40}$/u.test(localIdentity)) {
+      return yield* new InvalidLocalMacSigningIdentityError();
+    }
+    if (localIdentity) buildConfig.forceCodeSigning = true;
     buildConfig.mac = {
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
@@ -2727,6 +2745,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
+      // Personal builds need a certificate-based identity for Keychain grants
+      // to survive updates, without the distribution passkey profile/notarization.
+      ...(localIdentity ? { identity: localIdentity, type: "development", notarize: false } : {}),
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,

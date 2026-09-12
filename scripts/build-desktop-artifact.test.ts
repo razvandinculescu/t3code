@@ -30,6 +30,7 @@ import {
   LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
   MAC_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
+  InvalidLocalMacSigningIdentityError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
   UnsupportedDesktopBuildArchitectureError,
@@ -1812,6 +1813,64 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(error.message, "Failed to resolve macOS passkey signing configuration.");
     assert.notInclude(error.message, secret);
   });
+
+  it.effect(
+    "requires the pinned certificate for local macOS signing without distribution credentials",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* createBuildConfig(
+          "mac",
+          "dmg",
+          "1.2.3",
+          false,
+          false,
+          undefined,
+          undefined,
+        );
+        const mac = config.mac as Record<string, unknown>;
+        assert.equal(config.forceCodeSigning, true);
+        assert.equal(mac.identity, "1234567890ABCDEF1234567890ABCDEF12345678");
+        assert.equal(mac.type, "development");
+        assert.equal(mac.notarize, false);
+        assert.notProperty(mac, "provisioningProfile");
+        assert.notProperty(mac, "sign");
+      }).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                T3CODE_MACOS_LOCAL_SIGNING_IDENTITY: "1234567890ABCDEF1234567890ABCDEF12345678",
+              },
+            }),
+          ),
+        ),
+      ),
+  );
+
+  it.effect("rejects ad-hoc signing when a stable local macOS identity is requested", () =>
+    Effect.gen(function* () {
+      const error = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      ).pipe(Effect.flip);
+      assert.instanceOf(error, InvalidLocalMacSigningIdentityError);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              T3CODE_MACOS_LOCAL_SIGNING_IDENTITY: "-",
+            },
+          }),
+        ),
+      ),
+    ),
+  );
 
   it.effect("adds passkey entitlements and both renderer protocols to signed macOS builds", () =>
     Effect.gen(function* () {
