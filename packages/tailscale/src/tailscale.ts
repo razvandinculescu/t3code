@@ -364,6 +364,44 @@ export const disableTailscaleServe = (
     );
   });
 
+/** Keep startup recovery scoped to the server, including when tailscaled starts later. */
+export const runTailscaleServe = Effect.fn("Tailscale.runServe")(function* (input: {
+  readonly localPort: number;
+  readonly servePort: number;
+}) {
+  yield* Effect.acquireRelease(
+    Effect.gen(function* () {
+      let retryDelayMs = 1_000;
+      while (true) {
+        const configured = yield* ensureTailscaleServe(input).pipe(
+          Effect.as(true),
+          Effect.catch((cause) =>
+            Effect.logWarning("Tailscale Serve unavailable; retrying", {
+              cause,
+              ...input,
+              retryDelayMs,
+            }).pipe(Effect.as(false)),
+          ),
+        );
+        if (configured) {
+          yield* Effect.logInfo("Tailscale Serve configured", input);
+          return;
+        }
+        yield* Effect.sleep(retryDelayMs);
+        retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+      }
+    }).pipe(Effect.interruptible),
+    () =>
+      disableTailscaleServe({ servePort: input.servePort }).pipe(
+        Effect.tap(() => Effect.logInfo("Tailscale Serve disabled", input)),
+        Effect.catch((cause) =>
+          Effect.logWarning("Failed to disable Tailscale Serve", { cause, ...input }),
+        ),
+      ),
+  );
+  return yield* Effect.never;
+});
+
 export const probeTailscaleHttpsEndpoint = (input: {
   readonly baseUrl: string;
   readonly timeout?: Duration.Input;

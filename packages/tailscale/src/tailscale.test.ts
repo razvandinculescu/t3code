@@ -18,6 +18,7 @@ import {
   parseTailscaleMagicDnsName,
   parseTailscaleStatus,
   readTailscaleStatus,
+  runTailscaleServe,
   TAILSCALE_STATUS_TIMEOUT,
   TailscaleCommandExitError,
   TailscaleCommandSpawnError,
@@ -377,5 +378,104 @@ describe("tailscale", () => {
         { command: "tailscale", args: ["serve", "--https=8443", "off"] },
       ]);
     });
+  });
+
+  it.effect(
+    "recovers after a delayed daemon and recreates the mapping after a server restart",
+    () => {
+      const commands: ReadonlyArray<string>[] = [];
+      let attempts = 0;
+      const layer = mockSpawnerLayer((_command, args) => {
+        commands.push(args);
+        if (args.includes("--bg") && ++attempts <= 2) {
+          return { code: 1, stderr: "tailscaled is not running" };
+        }
+        return {};
+      });
+
+      return Effect.gen(function* () {
+        const first = yield* runTailscaleServe({ localPort: 13773, servePort: 8443 }).pipe(
+          Effect.scoped,
+          Effect.forkScoped,
+        );
+        yield* TestClock.adjust(0);
+        assert.equal(attempts, 1);
+        yield* TestClock.adjust("1 second");
+        assert.equal(attempts, 2);
+        yield* TestClock.adjust("2 seconds");
+        assert.equal(attempts, 3);
+        yield* TestClock.adjust("1 minute");
+        assert.equal(attempts, 3, "a working mapping must not cause repeated CLI spawns");
+        yield* Fiber.interrupt(first);
+        assert.deepEqual(commands.at(-1), ["serve", "--https=8443", "off"]);
+
+        const second = yield* runTailscaleServe({ localPort: 13774, servePort: 8443 }).pipe(
+          Effect.scoped,
+          Effect.forkScoped,
+        );
+        yield* TestClock.adjust(0);
+        assert.deepEqual(commands.at(-1), [
+          "serve",
+          "--bg",
+          "--https=8443",
+          "http://127.0.0.1:13774",
+        ]);
+        yield* Fiber.interrupt(second);
+        assert.equal(commands.filter((args) => args.includes("off")).length, 2);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "bounds retry delays and cancels recovery without deleting an unconfigured mapping",
+    () => {
+      const commands: ReadonlyArray<string>[] = [];
+      const layer = mockSpawnerLayer((_command, args) => {
+        commands.push(args);
+        return { code: 1, stderr: "tailscaled is not running" };
+      });
+
+      return Effect.gen(function* () {
+        const fiber = yield* runTailscaleServe({ localPort: 13773, servePort: 8443 }).pipe(
+          Effect.scoped,
+          Effect.forkScoped,
+        );
+        yield* TestClock.adjust(0);
+        for (const delay of [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]) {
+          const previous = commands.length;
+          yield* TestClock.adjust(delay - 1);
+          assert.equal(commands.length, previous);
+          yield* TestClock.adjust(1);
+          assert.equal(commands.length, previous + 1);
+        }
+        yield* Fiber.interrupt(fiber);
+        const stoppedCount = commands.length;
+        yield* TestClock.adjust("1 minute");
+        assert.equal(commands.length, stoppedCount);
+        assert.isFalse(commands.some((args) => args.includes("off")));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    },
+  );
+
+  it.effect("retries a timed-out configure command without blocking cancellation", () => {
+    let attempts = 0;
+    const layer = spawnerLayer(
+      ChildProcessSpawner.make(() => {
+        attempts++;
+        return Effect.succeed(neverFinishingMockHandle());
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const fiber = yield* runTailscaleServe({ localPort: 13773, servePort: 8443 }).pipe(
+        Effect.scoped,
+        Effect.forkScoped,
+      );
+      yield* TestClock.adjust("10 seconds");
+      assert.equal(attempts, 1);
+      yield* TestClock.adjust("1 second");
+      assert.equal(attempts, 2);
+      yield* Fiber.interrupt(fiber);
+    }).pipe(Effect.scoped, Effect.provide(layer));
   });
 });
