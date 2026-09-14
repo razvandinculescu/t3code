@@ -2,7 +2,7 @@
 # GitHub-hosted runner. Mirrors the Windows entry of release.yml minus relay
 # config, signing, and version alignment, so the artifact is the same shape the
 # upstream release job produces (server.asar sidecar, MSVC resource monitor,
-# bundled WSL node-pty). Manual only:
+# bundled self-contained WSL runtime). Manual only:
 #
 #   gh workflow run fork-windows-build.yml --ref <branch>
 #   gh run watch && gh run download -n t3code-windows-x64
@@ -15,13 +15,12 @@ permissions:
   contents: read
 
 jobs:
-  # node-pty publishes no Linux prebuilt and the WSL backend runs under the
-  # distro's own (Linux) Node, so the Linux pty.node is built here and handed to
-  # the Windows packaging job (same reasoning as release.yml).
-  build_wsl_node_pty:
-    name: Build WSL node-pty (linux-x64)
+  # Windows now consumes the complete self-contained Linux CLI archive for WSL.
+  # Build and execute it on Linux before handing it to the Windows packager.
+  build_wsl_runtime:
+    name: Build WSL runtime (linux-x64)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -39,28 +38,45 @@ jobs:
           run-install: |
             args:
               - --filter=t3...
+              - --filter=@t3tools/scripts...
 
-      - name: Build node-pty linux-x64 prebuild
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build web and server bundles
+        run: |
+          vp run --filter @t3tools/web build
+          node apps/server/scripts/cli.ts build --verbose
+
+      - name: Build CLI single-executable
+        env:
+          VP_NODE_VERSION: "26.8.2"
+        run: node apps/server/scripts/cli.ts build-exe --verbose
+
+      - name: Build resource monitor
+        run: |
+          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml
+          mkdir -p cli-resource-monitor/linux-x64
+          cp native/resource-monitor/target/release/t3-resource-monitor cli-resource-monitor/linux-x64/
+
+      - name: Package and smoke-test WSL runtime
         shell: bash
         run: |
           set -euo pipefail
-          pty_pkg="$(node -e "console.log(require.resolve('node-pty/package.json', { paths: ['$GITHUB_WORKSPACE/apps/server'] }))")"
-          pty_dir="$(dirname "$pty_pkg")"
-          ( cd "$pty_dir" && npx --yes node-gyp rebuild )
-          mkdir -p wsl-prebuild
-          cp "$pty_dir/build/Release/pty.node" wsl-prebuild/pty.node
-          file wsl-prebuild/pty.node
+          version=$(node -p "require('./apps/server/package.json').version")
+          node scripts/build-cli-archive.ts --platform linux --arch x64 --version "$version" --resource-monitor-dir cli-resource-monitor --output-dir release-cli
+          node scripts/smoke-cli-archive.ts --archive release-cli/*.tar.gz --expect-version "$version"
 
-      - name: Upload node-pty linux-x64 prebuild
+      - name: Upload WSL runtime
         uses: actions/upload-artifact@v7
         with:
-          name: wsl-node-pty-x64
-          path: wsl-prebuild/pty.node
+          name: wsl-runtime-x64
+          path: release-cli/*.tar.gz
           if-no-files-found: error
 
   build:
     name: Build Windows x64
-    needs: [build_wsl_node_pty]
+    needs: [build_wsl_runtime]
     runs-on: windows-2025
     timeout-minutes: 60
     steps:
@@ -108,11 +124,11 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Download WSL node-pty prebuild
+      - name: Download WSL runtime
         uses: actions/download-artifact@v7
         with:
-          name: wsl-node-pty-x64
-          path: wsl-prebuild
+          name: wsl-runtime-x64
+          path: wsl-runtime
 
       - name: Install Spectre-mitigated MSVC libs
         shell: pwsh
@@ -141,7 +157,7 @@ jobs:
             --target nsis \
             --arch x64 \
             --verbose \
-            --wsl-prebuild "$GITHUB_WORKSPACE/wsl-prebuild/pty.node"
+            --wsl-runtime "$GITHUB_WORKSPACE"/wsl-runtime/t3-*-linux-x64.tar.gz
           ls -la release
 
       - name: Upload installer
