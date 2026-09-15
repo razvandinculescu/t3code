@@ -29,6 +29,7 @@ import {
   type WorkLogEntry,
 } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
+import type { QueuedComposerMessage } from "../../queuedMessageStore";
 import {
   type MessageId,
   type OrchestrationLatestTurn,
@@ -401,6 +402,16 @@ export type MessagesTimelineRow =
       id: string;
       createdAt: string | null;
       snapshot: WorktreeSetupSnapshot;
+      /** The agent already started; render only the script row under the turn header. */
+      embedded: boolean;
+    }
+  | {
+      kind: "queued-message";
+      id: string;
+      createdAt: string;
+      queuedMessage: QueuedComposerMessage;
+      /** Oldest queued message, the one the next boundary sends. */
+      isNext: boolean;
     };
 
 export interface StableMessagesTimelineRowsState {
@@ -883,6 +894,8 @@ export function deriveMessagesTimelineRows(input: {
   liveAgentTaskIds?: ReadonlySet<string> | undefined;
   /** Live bootstrap progress. Renders a stage card under the first user message. */
   worktreeSetup?: WorktreeSetupSnapshot | null;
+  /** Messages sent during the running turn, rendered after the live rows. */
+  queuedMessages?: ReadonlyArray<QueuedComposerMessage>;
 }): MessagesTimelineRow[] {
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
@@ -1297,15 +1310,23 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  // The setup card takes the place of the working and thinking placeholders
-  // while a worktree is being prepared. It stays after the setup settles so a
-  // failure and its actions remain visible until the thread state moves on.
-  if (input.worktreeSetup) {
+  // Until the agent's turn is live, the setup card takes the place of the
+  // working and thinking placeholders. It stays after a failed or cancelled
+  // setup so the outcome and its actions remain visible until the thread
+  // state moves on. "Live" means the turn is in the timeline, not just that
+  // the server dispatched it: the card must not collapse in the gap between.
+  const setupHandedOff =
+    input.worktreeSetup !== null &&
+    input.worktreeSetup !== undefined &&
+    worktreeSetupAgentStarted(input.worktreeSetup) &&
+    input.latestTurn?.startedAt != null;
+  if (input.worktreeSetup && !setupHandedOff) {
     const setupRow = {
       kind: "worktree-setup",
       id: WORKTREE_SETUP_ROW_ID,
       createdAt: input.worktreeSetup.startedAt,
       snapshot: input.worktreeSetup,
+      embedded: false,
     } as const;
     // Sit directly under the first user message: a finished snapshot can
     // outlive the first assistant reply, and it belongs to the send, not the
@@ -1324,6 +1345,31 @@ export function deriveMessagesTimelineRows(input: {
   if (input.isWorking && activeTurnHeaderIndex === input.timelineEntries.length) {
     appendWorkingRow();
   }
+  // An async setup script outlives the handoff. The turn owns the header, so
+  // the script's row sits first under it, ahead of the agent's own work. A
+  // script that already finished (or never ran) has nothing left to show.
+  const setupScriptStage = input.worktreeSetup?.stages.find((stage) => stage.id === "setup-script");
+  if (
+    input.worktreeSetup &&
+    setupHandedOff &&
+    (setupScriptStage?.status === "running" || setupScriptStage?.status === "failed")
+  ) {
+    const setupRow = {
+      kind: "worktree-setup",
+      id: WORKTREE_SETUP_ROW_ID,
+      createdAt: input.worktreeSetup.startedAt,
+      snapshot: input.worktreeSetup,
+      embedded: true,
+    } as const;
+    const workingRowIndex = nextRows.findIndex((row) => row.kind === "working");
+    if (workingRowIndex >= 0) {
+      nextRows.splice(workingRowIndex + 1, 0, setupRow);
+    } else {
+      // The turn already finished (or has not been dispatched yet): the row
+      // trails the reply so a still-running script stays visible after it.
+      nextRows.push(setupRow);
+    }
+  }
   if (input.isWorking && (!hasActivityRow || latestToolFailed)) {
     nextRows.push({
       kind: "thinking",
@@ -1331,11 +1377,25 @@ export function deriveMessagesTimelineRows(input: {
       createdAt: input.activeTurnStartedAt,
     });
   }
-
-  return attachTrailingToolGroupsToAssistant(nextRows);
+  const rows = attachTrailingToolGroupsToAssistant(nextRows);
+  input.queuedMessages?.forEach((queuedMessage, index) => {
+    rows.push({
+      kind: "queued-message",
+      id: `queued-message:${queuedMessage.id}`,
+      createdAt: queuedMessage.createdAt,
+      queuedMessage,
+      isNext: index === 0,
+    });
+  });
+  return rows;
 }
 
 export const WORKTREE_SETUP_ROW_ID = "worktree-setup-row";
+
+/** True once the bootstrap handed off to the agent (async setup script may still run). */
+export function worktreeSetupAgentStarted(snapshot: WorktreeSetupSnapshot): boolean {
+  return snapshot.stages.some((stage) => stage.id === "agent" && stage.status === "done");
+}
 
 type MessagesTimelineRowsInput = Parameters<typeof deriveMessagesTimelineRows>[0];
 
@@ -1464,6 +1524,11 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;
+
+    case "queued-message": {
+      const bq = b as typeof a;
+      return a.queuedMessage === bq.queuedMessage && a.isNext === bq.isNext;
+    }
 
     case "work": {
       const bw = b as typeof a;
@@ -1605,6 +1670,8 @@ export function estimateTimelineRowTextLength(
     }
     case "proposed-plan":
       return row.proposedPlan.planMarkdown.length;
+    case "queued-message":
+      return row.queuedMessage.prompt.trim().length;
     case "work-toggle":
     case "turn-fold":
     case "context-compaction":
@@ -1642,6 +1709,7 @@ export function resolveTimelineRowItemType(
     case "work":
     case "work-live":
     case "proposed-plan":
+    case "queued-message":
       return `${row.kind}:${resolveTimelineRowSizeBucket(
         estimateTimelineRowTextLength(row, options),
       )}`;
