@@ -6,7 +6,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-it("loads project schemas and validates grapheme monograms without native Intl.Segmenter", async () => {
+it("loads project schemas and decodes snapshot monograms without native Intl.Segmenter", async () => {
   const descriptors = Object.getOwnPropertyDescriptors(Intl);
   Reflect.deleteProperty(descriptors, "Segmenter");
   vi.stubGlobal("Intl", Object.create(Object.getPrototypeOf(Intl), descriptors));
@@ -16,10 +16,10 @@ it("loads project schemas and validates grapheme monograms without native Intl.S
   const { ProjectMonogramText } = await import("@t3tools/contracts");
   const decode = Schema.decodeUnknownSync(ProjectMonogramText);
 
-  for (const text of ["T3", "É", "文書", "कि", "किखि", "e\u0301", "한"]) {
+  for (const text of ["T3", "É", "文書", "कि", "किखि", "e\u0301", "한", "ABC", "किखिगि"]) {
     expect(decode(text)).toBe(text);
   }
-  for (const text of ["ABC", "किखिगि", "A B", "🚀"]) {
+  for (const text of ["A B", "🚀", "A".repeat(33)]) {
     expect(() => decode(text)).toThrow();
   }
 });
