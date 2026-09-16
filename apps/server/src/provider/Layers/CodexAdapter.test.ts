@@ -599,7 +599,7 @@ function startLifecycleRuntime() {
   });
 }
 
-function assertOpenReasoningSealedAtTurnEnd(input: {
+function assertReasoningDeltasBeforeTurnEnd(input: {
   readonly terminalEvent: ProviderEvent;
   readonly terminalType: "turn.completed" | "turn.aborted";
 }) {
@@ -608,7 +608,7 @@ function assertOpenReasoningSealedAtTurnEnd(input: {
     const lifecycleEventsFiber = yield* adapter.streamEvents.pipe(
       Stream.filter(
         (event) =>
-          event.type === "item.updated" ||
+          event.type === "content.delta" ||
           event.type === "item.completed" ||
           event.type === input.terminalType,
       ),
@@ -637,69 +637,18 @@ function assertOpenReasoningSealedAtTurnEnd(input: {
       } satisfies ProviderEvent);
 
     yield* emitDelta("evt-open-reasoning-1", "partial");
-    // This remains below the live-update threshold. The terminal completion
-    // still has to flush the full accumulated text, not the last emitted text.
+    // Both fragments must reach ingestion before the terminal event.
     yield* emitDelta("evt-open-reasoning-2", " tail");
     yield* runtime.emit(input.terminalEvent);
 
     const events = Array.from(yield* Fiber.join(lifecycleEventsFiber));
     NodeAssert.deepStrictEqual(
       events.map((event) => event.type),
-      ["item.updated", "item.completed", input.terminalType],
+      ["content.delta", "content.delta", input.terminalType],
     );
-    const completion = events[1];
-    if (completion?.type !== "item.completed") {
-      return;
-    }
-    NodeAssert.notEqual(completion.eventId, input.terminalEvent.id);
-    NodeAssert.equal(completion.itemId, "rs-open");
-    NodeAssert.equal(completion.payload.itemType, "reasoning");
-    NodeAssert.equal(completion.payload.status, "completed");
-    NodeAssert.equal(completion.payload.detail, "partial tail");
-    NodeAssert.deepStrictEqual(completion.payload.data, { toolCallId: "rs-open" });
-    NodeAssert.equal(events[2]?.eventId, input.terminalEvent.id);
-
-    const lateEventsFiber = yield* adapter.streamEvents.pipe(
-      Stream.filter((event) => event.type === "item.completed" || event.type === "turn.started"),
-      Stream.takeUntil((event) => event.type === "turn.started"),
-      Stream.runCollect,
-      Effect.forkChild,
-    );
-    yield* runtime.emit({
-      id: asEventId("evt-late-native-reasoning-completion"),
-      kind: "notification",
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:02.000Z",
-      method: "item/completed",
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-1"),
-      itemId: asItemId("rs-open"),
-      payload: {
-        completedAtMs: 1_778_000_000_002,
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "reasoning",
-          id: "rs-open",
-          summary: ["partial tail"],
-          content: [],
-        },
-      },
-    } satisfies ProviderEvent);
-    yield* runtime.emit({
-      id: asEventId("evt-next-turn-started"),
-      kind: "notification",
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:03.000Z",
-      method: "turn/started",
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-2"),
-    } satisfies ProviderEvent);
-
-    const lateEvents = Array.from(yield* Fiber.join(lateEventsFiber));
     NodeAssert.deepStrictEqual(
-      lateEvents.map((event) => event.type),
-      ["turn.started"],
+      events.filter((event) => event.type === "content.delta").map((event) => event.payload.delta),
+      ["partial", " tail"],
     );
   });
 }
@@ -1338,64 +1287,57 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect(
-    "surfaces completed reasoning items with their summary text and a collapsible identity",
-    () =>
-      Effect.gen(function* () {
-        const { adapter, runtime } = yield* startLifecycleRuntime();
-        const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+  it.effect("preserves completed reasoning text for ingestion snapshot fallback", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
 
-        yield* runtime.emit({
-          id: asEventId("evt-reasoning-complete"),
-          kind: "notification",
-          provider: ProviderDriverKind.make("codex"),
-          createdAt: "2026-01-01T00:00:00.000Z",
-          method: "item/completed",
-          threadId: asThreadId("thread-1"),
-          turnId: asTurnId("turn-1"),
-          itemId: asItemId("rs_1"),
-          payload: {
-            completedAtMs: 1_778_000_000_000,
-            threadId: "thread-1",
-            turnId: "turn-1",
-            item: {
-              type: "reasoning",
-              id: "rs_1",
-              summary: ["**Clarifying precedence**", "Unary minus binds looser"],
-              content: [],
-            },
+      yield* runtime.emit({
+        id: asEventId("evt-reasoning-complete"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("rs_1"),
+        payload: {
+          completedAtMs: 1_778_000_000_000,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "reasoning",
+            id: "rs_1",
+            summary: ["**Clarifying precedence**", "Unary minus binds looser"],
+            content: [],
           },
-        } satisfies ProviderEvent);
+        },
+      } satisfies ProviderEvent);
 
-        const firstEvent = yield* Fiber.join(firstEventFiber);
-        NodeAssert.equal(firstEvent._tag, "Some");
-        if (firstEvent._tag !== "Some") {
-          return;
-        }
-        NodeAssert.equal(firstEvent.value.type, "item.completed");
-        if (firstEvent.value.type !== "item.completed") {
-          return;
-        }
-        NodeAssert.equal(firstEvent.value.payload.itemType, "reasoning");
-        NodeAssert.equal(firstEvent.value.payload.title, "Reasoning");
-        NodeAssert.equal(
-          firstEvent.value.payload.detail,
-          "**Clarifying precedence**\n\nUnary minus binds looser",
-        );
-        NodeAssert.deepStrictEqual(
-          (firstEvent.value.payload.data as { readonly toolCallId?: unknown } | undefined)
-            ?.toolCallId,
-          "rs_1",
-        );
-      }),
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      NodeAssert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      NodeAssert.equal(firstEvent.value.payload.itemType, "reasoning");
+      NodeAssert.equal(firstEvent.value.payload.title, "Reasoning");
+      NodeAssert.equal(
+        firstEvent.value.payload.detail,
+        "**Clarifying precedence**\n\nUnary minus binds looser",
+      );
+    }),
   );
 
-  it.effect("streams reasoning text deltas as throttled reasoning item updates", () =>
+  it.effect("streams only incremental reasoning text without activity copies", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
       const updatesFiber = yield* Stream.take(
-        Stream.filter(adapter.streamEvents, (event) => event.type === "item.updated"),
-        2,
+        Stream.filter(adapter.streamEvents, (event) => event.type === "content.delta"),
+        3,
       ).pipe(Stream.runCollect, Effect.forkChild);
 
       const emitDelta = (id: string, delta: string) =>
@@ -1418,34 +1360,27 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         } satisfies ProviderEvent);
 
       yield* emitDelta("evt-delta-1", "Analizez ");
-      // Under the 512-char chunk threshold: accumulated, but no new update.
+      // Small deltas stay incremental; ingestion owns batching.
       yield* emitDelta("evt-delta-2", "prioritatea operatorilor");
       yield* emitDelta("evt-delta-3", "x".repeat(600));
 
       const updates = Array.from(yield* Fiber.join(updatesFiber));
-      NodeAssert.equal(updates.length, 2);
-      const [first, second] = updates;
-      if (first?.type !== "item.updated" || second?.type !== "item.updated") {
-        return;
-      }
-      NodeAssert.equal(first.payload.itemType, "reasoning");
-      NodeAssert.equal(first.payload.title, "Reasoning");
-      NodeAssert.equal(first.payload.status, "inProgress");
-      NodeAssert.equal(first.payload.detail, "Analizez ");
+      NodeAssert.equal(updates.length, 3);
       NodeAssert.deepStrictEqual(
-        (first.payload.data as { readonly toolCallId?: unknown } | undefined)?.toolCallId,
-        "rs_1",
+        updates.map((event) => event.payload.delta),
+        ["Analizez ", "prioritatea operatorilor", "x".repeat(600)],
       );
-      NodeAssert.equal(
-        second.payload.detail,
-        `Analizez prioritatea operatorilor${"x".repeat(600)}`,
+      NodeAssert.ok(
+        updates.every(
+          (event) =>
+            event.payload.streamKind === "reasoning_summary_text" && event.itemId === "rs_1",
+        ),
       );
-      NodeAssert.equal(second.itemId, first.itemId);
     }),
   );
 
-  it.effect("seals open reasoning rows before a turn completes", () =>
-    assertOpenReasoningSealedAtTurnEnd({
+  it.effect("forwards every pending reasoning delta before turn completion", () =>
+    assertReasoningDeltasBeforeTurnEnd({
       terminalType: "turn.completed",
       terminalEvent: {
         id: asEventId("evt-turn-completed-with-open-reasoning"),
@@ -1467,8 +1402,8 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("seals open reasoning rows before a turn aborts", () =>
-    assertOpenReasoningSealedAtTurnEnd({
+  it.effect("forwards every pending reasoning delta before turn abortion", () =>
+    assertReasoningDeltasBeforeTurnEnd({
       terminalType: "turn.aborted",
       terminalEvent: {
         id: asEventId("evt-turn-aborted-with-open-reasoning"),
@@ -1483,11 +1418,11 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("drops the reasoning accumulator when the reasoning item completes", () =>
+  it.effect("keeps deltas after item completion independent of the earlier text", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
       const updatesFiber = yield* Stream.take(
-        Stream.filter(adapter.streamEvents, (event) => event.type === "item.updated"),
+        Stream.filter(adapter.streamEvents, (event) => event.type === "content.delta"),
         2,
       ).pipe(Stream.runCollect, Effect.forkChild);
 
@@ -1527,17 +1462,16 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           item: { type: "reasoning", id: "rs_1", summary: ["part one"], content: [] },
         },
       } satisfies ProviderEvent);
-      // A delta for the same itemId after completion starts a fresh
-      // accumulator instead of appending to the sealed item's text.
+      // Completion must not make the next delta replay the earlier text.
       yield* emitDelta("evt-delta-complete-2", "fresh start");
 
       const updates = Array.from(yield* Fiber.join(updatesFiber));
       NodeAssert.equal(updates.length, 2);
       const second = updates[1];
-      if (second?.type !== "item.updated") {
+      if (second?.type !== "content.delta") {
         return;
       }
-      NodeAssert.equal(second.payload.detail, "fresh start");
+      NodeAssert.equal(second.payload.delta, "fresh start");
     }),
   );
 
@@ -1581,7 +1515,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
       const updatesFiber = yield* Stream.take(
-        Stream.filter(adapter.streamEvents, (event) => event.type === "item.updated"),
+        Stream.filter(adapter.streamEvents, (event) => event.type === "content.delta"),
         2,
       ).pipe(Stream.runCollect, Effect.forkChild);
 
@@ -1605,25 +1539,25 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         } satisfies ProviderEvent);
 
       yield* emitDelta("evt-part-0", 0, "First part.");
-      // A second indexed part must compose with a paragraph boundary, not
-      // merge into the first part's tail.
+      // Preserve the part index so ingestion can insert the boundary.
       yield* emitDelta("evt-part-1", 1, "x".repeat(600));
 
       const updates = Array.from(yield* Fiber.join(updatesFiber));
       NodeAssert.equal(updates.length, 2);
       const second = updates[1];
-      if (second?.type !== "item.updated") {
+      if (second?.type !== "content.delta") {
         return;
       }
-      NodeAssert.equal(second.payload.detail, `First part.\n\n${"x".repeat(600)}`);
+      NodeAssert.equal(second.payload.delta, "x".repeat(600));
+      NodeAssert.equal(second.payload.summaryIndex, 1);
     }),
   );
 
-  it.effect("composes live reasoning in completion order: summary parts, then content parts", () =>
+  it.effect("keeps raw and summary streams distinct for ingestion", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
       const updatesFiber = yield* Stream.take(
-        Stream.filter(adapter.streamEvents, (event) => event.type === "item.updated"),
+        Stream.filter(adapter.streamEvents, (event) => event.type === "content.delta"),
         2,
       ).pipe(Stream.runCollect, Effect.forkChild);
 
@@ -1660,18 +1594,19 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
                 },
         } satisfies ProviderEvent);
 
-      // A content part arriving FIRST must not jump ahead of the summary in
-      // the live row — completion orders summary parts before content parts.
+      // Distinct stream kinds let ingestion give each text its own segment.
       yield* emitDelta("evt-content-first", "item/reasoning/textDelta", "chain of thought", 0);
       yield* emitDelta("evt-summary-second", "item/reasoning/summaryTextDelta", "x".repeat(600), 0);
 
       const updates = Array.from(yield* Fiber.join(updatesFiber));
       NodeAssert.equal(updates.length, 2);
       const second = updates[1];
-      if (second?.type !== "item.updated") {
+      if (second?.type !== "content.delta") {
         return;
       }
-      NodeAssert.equal(second.payload.detail, `${"x".repeat(600)}\n\nchain of thought`);
+      NodeAssert.equal(second.payload.delta, "x".repeat(600));
+      NodeAssert.equal(second.payload.streamKind, "reasoning_summary_text");
+      NodeAssert.equal(updates[0]?.payload.streamKind, "reasoning_text");
     }),
   );
 

@@ -49,11 +49,7 @@ import {
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import type { ClaudeScopedLimitNames } from "./claudeUsageLimits.ts";
-import {
-  makeClaudeAdapter,
-  type ClaudeAdapterLiveOptions,
-  shouldEmitReasoningUpdate,
-} from "./ClaudeAdapter.ts";
+import { makeClaudeAdapter, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -525,7 +521,10 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(createInput?.options.permissionMode, "bypassPermissions");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
       // The honored flag is dropped from extraArgs so the CLI sees it once.
-      assert.deepEqual(createInput?.options.extraArgs, { verbose: null });
+      assert.deepEqual(createInput?.options.extraArgs, {
+        verbose: null,
+        "thinking-display": "summarized",
+      });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -582,7 +581,10 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const options = harness.getLastCreateQueryInput()?.options;
-      assert.deepEqual(options?.settings, { autoCompactWindow: 300000 });
+      assert.deepEqual(options?.settings, {
+        showThinkingSummaries: true,
+        autoCompactWindow: 300000,
+      });
       assert.deepEqual(options?.supportedDialogKinds, ["resume_return"]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -665,6 +667,8 @@ describe("ClaudeAdapterLive", () => {
       ]);
       assert.equal(capableOptions?.model, "k3-synthetic");
       assert.equal(capableOptions?.effort, "low");
+      assert.equal(capableOptions?.thinking, undefined);
+      assert.equal(capableOptions?.extraArgs?.["thinking-display"], undefined);
       assert.deepEqual(capableOptions?.settings, { alwaysThinkingEnabled: true });
 
       // The declared default applies when nothing is selected.
@@ -682,6 +686,28 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  for (const model of ["k3", "glm-5.3", "oai-gpt-6-astra"]) {
+    it.effect(`preserves the thinking protocol of custom route ${model}`, () => {
+      const harness = makeHarness({ claudeConfig: { customModels: [model] } });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          modelSelection: createModelSelection(ProviderInstanceId.make("claudeAgent"), model, []),
+          runtimeMode: "full-access",
+        });
+        const options = harness.getLastCreateQueryInput()?.options;
+        assert.equal(options?.model, model);
+        assert.equal(options?.thinking, undefined);
+        assert.equal(options?.extraArgs?.["thinking-display"], undefined);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
 
   it.effect("requests summarized thinking display for Mythos-class models", () => {
     const harness = makeHarness();
@@ -731,7 +757,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("does not set a thinking display for models with raw thinking", () => {
+  it.effect("requests summaries for standard Claude models", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -747,7 +773,7 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
-      assert.equal(createInput?.options.extraArgs?.["thinking-display"], undefined);
+      assert.equal(createInput?.options.extraArgs?.["thinking-display"], "summarized");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -798,6 +824,61 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.settings, {
         alwaysThinkingEnabled: false,
       });
+      assert.equal(createInput?.options.thinking, undefined);
+      assert.equal(createInput?.options.extraArgs?.["thinking-display"], undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("requests Claude thinking summaries unless thinking is off", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          SYNTHETIC_CLAUDE_THINKING_MODEL,
+          [{ id: "thinking", value: true }],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.deepEqual(createInput?.options.settings, {
+        alwaysThinkingEnabled: true,
+        showThinkingSummaries: true,
+      });
+      assert.deepEqual(createInput?.options.thinking, {
+        type: "adaptive",
+        display: "summarized",
+      });
+      assert.equal(createInput?.options.extraArgs?.["thinking-display"], "summarized");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("honors a launch-arg that omits Claude thinking display", () => {
+    const harness = makeHarness({
+      claudeConfig: { launchArgs: "--thinking-display omitted" },
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.settings, undefined);
+      assert.equal(createInput?.options.thinking, undefined);
+      assert.equal(createInput?.options.extraArgs?.["thinking-display"], "omitted");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -820,7 +901,13 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
-      assert.equal(createInput?.options.settings, undefined);
+      assert.deepEqual(createInput?.options.settings, {
+        showThinkingSummaries: true,
+      });
+      assert.deepEqual(createInput?.options.thinking, {
+        type: "adaptive",
+        display: "summarized",
+      });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -844,6 +931,7 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.deepEqual(createInput?.options.settings, {
+        showThinkingSummaries: true,
         fastMode: true,
       });
     }).pipe(
@@ -868,7 +956,9 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
-      assert.equal(createInput?.options.settings, undefined);
+      assert.deepEqual(createInput?.options.settings, {
+        showThinkingSummaries: true,
+      });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -961,7 +1051,10 @@ describe("ClaudeAdapterLive", () => {
         const builtInOptions = yield* start(builtInHarness, SYNTHETIC_CLAUDE_CAPABLE_MODEL);
         assert.equal(builtInOptions.model, `${SYNTHETIC_CLAUDE_CAPABLE_MODEL}[expanded]`);
         assert.equal(builtInOptions.effort, "max");
-        assert.deepEqual(builtInOptions.settings, { fastMode: true });
+        assert.deepEqual(builtInOptions.settings, {
+          showThinkingSummaries: true,
+          fastMode: true,
+        });
       });
     },
   );
@@ -1504,7 +1597,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("attaches thinking blocks to a reasoning item with a stable itemId", () => {
+  it.effect("forwards thinking deltas once without legacy reasoning activities", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -1610,69 +1703,25 @@ describe("ClaudeAdapterLive", () => {
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
 
-      const reasoningStarted = runtimeEvents.find(
-        (event) => event.type === "item.started" && event.payload.itemType === "reasoning",
-      );
-      assert.equal(reasoningStarted?.type, "item.started");
-      if (reasoningStarted?.type !== "item.started") {
-        return;
-      }
-      assert.equal(reasoningStarted.payload.status, "inProgress");
-      assert.equal(reasoningStarted.payload.title, "Reasoning");
-      const reasoningItemId = reasoningStarted.itemId;
-      assert.equal(typeof reasoningItemId, "string");
-
       const reasoningDeltas = runtimeEvents.filter(
-        (event) => event.type === "content.delta" && event.payload.streamKind === "reasoning_text",
+        (event) =>
+          event.type === "content.delta" && event.payload.streamKind === "reasoning_summary_text",
       );
-      assert.equal(reasoningDeltas.length, 2);
-      for (const delta of reasoningDeltas) {
-        assert.equal(String(delta.itemId), String(reasoningItemId));
-      }
       assert.deepEqual(
-        reasoningDeltas.map((delta) => (delta.type === "content.delta" ? delta.payload.delta : "")),
+        reasoningDeltas.map((event) => (event.type === "content.delta" ? event.payload.delta : "")),
         ["Let me think this through, ", longThought],
       );
-
-      const reasoningUpdates = runtimeEvents.filter(
-        (event) => event.type === "item.updated" && event.payload.itemType === "reasoning",
+      assert.ok(reasoningDeltas.every((event) => event.turnId === turn.turnId));
+      assert.equal(
+        runtimeEvents.some(
+          (event) =>
+            (event.type === "item.started" ||
+              event.type === "item.updated" ||
+              event.type === "item.completed") &&
+            event.payload.itemType === "reasoning",
+        ),
+        false,
       );
-      // The opening sentence goes out as soon as it is a few words long; the
-      // 600-char delta crosses the live-update throttle once more.
-      assert.equal(reasoningUpdates.length, 2);
-      const firstUpdate = reasoningUpdates[0];
-      if (firstUpdate?.type === "item.updated") {
-        assert.equal(String(firstUpdate.itemId), String(reasoningItemId));
-        assert.equal(firstUpdate.payload.detail, "Let me think this through, ");
-      }
-      const reasoningUpdate = reasoningUpdates[1];
-      if (reasoningUpdate?.type === "item.updated") {
-        assert.equal(String(reasoningUpdate.itemId), String(reasoningItemId));
-        assert.equal(reasoningUpdate.payload.detail, `Let me think this through, ${longThought}`);
-        const updateData = reasoningUpdate.payload.data as { toolCallId?: string } | undefined;
-        assert.equal(String(updateData?.toolCallId), String(reasoningItemId));
-      }
-
-      const reasoningCompleted = runtimeEvents.find(
-        (event) => event.type === "item.completed" && event.payload.itemType === "reasoning",
-      );
-      assert.equal(reasoningCompleted?.type, "item.completed");
-      if (reasoningCompleted?.type === "item.completed") {
-        assert.equal(String(reasoningCompleted.itemId), String(reasoningItemId));
-        assert.equal(reasoningCompleted.payload.status, "completed");
-        assert.equal(
-          reasoningCompleted.payload.detail,
-          `Let me think this through, ${longThought}`,
-        );
-        const completedData = reasoningCompleted.payload.data as
-          | { toolCallId?: string }
-          | undefined;
-        assert.equal(String(completedData?.toolCallId), String(reasoningItemId));
-      }
-
-      const startedIndex = runtimeEvents.indexOf(reasoningStarted);
-      const completedIndex = runtimeEvents.indexOf(reasoningCompleted!);
-      assert.equal(startedIndex >= 0 && completedIndex > startedIndex, true);
 
       // Thinking text must not leak into the assistant message backfill.
       const assistantCompleted = runtimeEvents.find(
@@ -1751,12 +1800,13 @@ describe("ClaudeAdapterLive", () => {
             turnStartMessageIds: [requestingFirst ? null : "assistant-bg-1"],
           });
           const reasoningCompleted = events.find(
-            (event) => event.type === "item.completed" && event.payload.itemType === "reasoning",
+            (event) =>
+              event.type === "content.delta" &&
+              event.payload.streamKind === "reasoning_summary_text",
           );
-          assert.equal(reasoningCompleted?.type, "item.completed");
-          if (reasoningCompleted?.type === "item.completed") {
-            assert.equal(reasoningCompleted.payload.detail, "Background thought");
-            assert.equal(reasoningCompleted.payload.title, "Reasoning");
+          assert.equal(reasoningCompleted?.type, "content.delta");
+          if (reasoningCompleted?.type === "content.delta") {
+            assert.equal(reasoningCompleted.payload.delta, "Background thought");
           }
         }).pipe(
           Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -1881,12 +1931,13 @@ describe("ClaudeAdapterLive", () => {
 
         const events = Array.from(yield* Fiber.join(eventsFiber));
         const reasoningCompleted = events.filter(
-          (event) => event.type === "item.completed" && event.payload.itemType === "reasoning",
+          (event) =>
+            event.type === "content.delta" && event.payload.streamKind === "reasoning_summary_text",
         );
         assert.equal(reasoningCompleted.length, 2);
         assert.deepEqual(
           reasoningCompleted.map((event) =>
-            event.type === "item.completed" ? event.payload.detail : undefined,
+            event.type === "content.delta" ? event.payload.delta : undefined,
           ),
           ["Background thought", "Streamed thought"],
         );
@@ -1980,15 +2031,17 @@ describe("ClaudeAdapterLive", () => {
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
       const reasoningCompletions = runtimeEvents.filter(
-        (event) => event.type === "item.completed" && event.payload.itemType === "reasoning",
+        (event) =>
+          event.type === "content.delta" && event.payload.streamKind === "reasoning_summary_text",
       );
-      // Exactly one completion, after the PARENT's stop — the subagent's stop
-      // would have completed it early with the partial text.
+      // Subagent block stops do not create a second copy of parent thinking.
       assert.equal(reasoningCompletions.length, 1);
-      const completion = reasoningCompletions[0];
-      if (completion?.type === "item.completed") {
-        assert.equal(completion.payload.detail, "Parent thought");
-      }
+      assert.equal(
+        reasoningCompletions
+          .map((event) => (event.type === "content.delta" ? event.payload.delta : ""))
+          .join(""),
+        "Parent thought",
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -2214,7 +2267,7 @@ describe("ClaudeAdapterLive", () => {
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 14).pipe(
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 11).pipe(
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -2241,7 +2294,7 @@ describe("ClaudeAdapterLive", () => {
           index: 0,
           delta: {
             type: "thinking_delta",
-            thinking: "Let me look at this",
+            thinking: "Let",
           },
         },
       } as unknown as SDKMessage);
@@ -2324,45 +2377,26 @@ describe("ClaudeAdapterLive", () => {
           "session.state.changed",
           "turn.started",
           "thread.started",
-          "item.started",
           "content.delta",
-          "item.updated",
           "item.started",
           "item.updated",
           "item.updated",
-          "item.completed",
           "item.completed",
           "turn.completed",
         ],
       );
 
-      const reasoningStarted = runtimeEvents.find(
-        (event) => event.type === "item.started" && event.payload.itemType === "reasoning",
-      );
-      assert.equal(reasoningStarted?.type, "item.started");
-
       const reasoningDelta = runtimeEvents.find(
-        (event) => event.type === "content.delta" && event.payload.streamKind === "reasoning_text",
+        (event) =>
+          event.type === "content.delta" && event.payload.streamKind === "reasoning_summary_text",
       );
       assert.equal(reasoningDelta?.type, "content.delta");
       if (reasoningDelta?.type === "content.delta") {
-        assert.equal(reasoningDelta.payload.delta, "Let me look at this");
+        assert.equal(reasoningDelta.payload.delta, "Let");
         assert.equal(String(reasoningDelta.turnId), String(turn.turnId));
-        // Thinking deltas carry the reasoning itemId (upstream issue #5542).
-        assert.equal(String(reasoningDelta.itemId), String(reasoningStarted?.itemId));
       }
 
-      const reasoningCompleted = runtimeEvents.find(
-        (event) => event.type === "item.completed" && event.payload.itemType === "reasoning",
-      );
-      assert.equal(reasoningCompleted?.type, "item.completed");
-      if (reasoningCompleted?.type === "item.completed") {
-        assert.equal(reasoningCompleted.payload.detail, "Let me look at this");
-      }
-
-      const toolStarted = runtimeEvents.find(
-        (event) => event.type === "item.started" && event.payload.itemType !== "reasoning",
-      );
+      const toolStarted = runtimeEvents.find((event) => event.type === "item.started");
       assert.equal(toolStarted?.type, "item.started");
       if (toolStarted?.type === "item.started") {
         assert.equal(toolStarted.payload.itemType, "dynamic_tool_call");
@@ -2402,6 +2436,87 @@ describe("ClaudeAdapterLive", () => {
           "src/example.ts:1:foo",
         );
       }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("backfills Claude thinking summaries from assistant snapshots", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      const thinkingSnapshot = {
+        type: "assistant",
+        session_id: "sdk-session-thinking-snapshot",
+        uuid: "assistant-thinking-snapshot",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-thinking",
+          content: [
+            { type: "thinking", thinking: "Use Euclidean algorithm." },
+            { type: "text", text: "The gcd is 21." },
+          ],
+        },
+      } as unknown as SDKMessage;
+      harness.query.emit(thinkingSnapshot);
+      harness.query.emit(thinkingSnapshot);
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-thinking-snapshot",
+        uuid: "assistant-thinking-snapshot-2",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-thinking-2",
+          content: [{ type: "thinking", thinking: "Verify the result." }],
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-thinking-snapshot",
+        uuid: "result-thinking-snapshot",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const reasoningDeltas = runtimeEvents.filter(
+        (event) =>
+          event.type === "content.delta" && event.payload.streamKind === "reasoning_summary_text",
+      );
+      assert.equal(reasoningDeltas.length, 2);
+      const reasoningDelta = reasoningDeltas[0];
+      assert.equal(reasoningDelta?.type, "content.delta");
+      if (reasoningDelta?.type === "content.delta") {
+        assert.equal(reasoningDelta.payload.delta, "Use Euclidean algorithm.");
+        assert.equal(String(reasoningDelta.turnId), String(turn.turnId));
+      }
+      assert.deepEqual(
+        runtimeEvents.flatMap((event) =>
+          event.type === "content.delta" ? [event.payload.delta] : [],
+        ),
+        ["Use Euclidean algorithm.", "The gcd is 21.", "Verify the result."],
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -9228,62 +9343,6 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
-    );
-  });
-});
-
-describe("shouldEmitReasoningUpdate", () => {
-  it("sends the first text once a few words exist", () => {
-    // The summarizer's opening delta is often a lone "I": hold it.
-    assert.equal(
-      shouldEmitReasoningUpdate({ lastEmittedLength: 0, pendingChars: 1, elapsedMs: 0 }),
-      false,
-    );
-    // The rest of the opening sentence lands: show it, no pacing interval yet.
-    assert.equal(
-      shouldEmitReasoningUpdate({ lastEmittedLength: 0, pendingChars: 16, elapsedMs: 0 }),
-      true,
-    );
-    // Only fragments keep trickling in: stop holding them after the max wait.
-    assert.equal(
-      shouldEmitReasoningUpdate({ lastEmittedLength: 0, pendingChars: 3, elapsedMs: 1_500 }),
-      true,
-    );
-    assert.equal(
-      shouldEmitReasoningUpdate({ lastEmittedLength: 0, pendingChars: 3, elapsedMs: 1_000 }),
-      false,
-    );
-  });
-
-  it("sends nothing when no new text is pending", () => {
-    assert.equal(
-      shouldEmitReasoningUpdate({ lastEmittedLength: 0, pendingChars: 0, elapsedMs: 5_000 }),
-      false,
-    );
-  });
-
-  it("paces summarized-thinking chunks: enough text and enough time", () => {
-    // One API chunk (~150 chars) after the previous update settled.
-    assert.equal(
-      shouldEmitReasoningUpdate({ lastEmittedLength: 40, pendingChars: 150, elapsedMs: 400 }),
-      true,
-    );
-    // Same chunk landing in the same instant as the previous update: hold it.
-    assert.equal(
-      shouldEmitReasoningUpdate({ lastEmittedLength: 40, pendingChars: 150, elapsedMs: 0 }),
-      false,
-    );
-    // Time has passed but only a few characters arrived: hold them too.
-    assert.equal(
-      shouldEmitReasoningUpdate({ lastEmittedLength: 40, pendingChars: 20, elapsedMs: 5_000 }),
-      false,
-    );
-  });
-
-  it("flushes a large burst regardless of pacing", () => {
-    assert.equal(
-      shouldEmitReasoningUpdate({ lastEmittedLength: 40, pendingChars: 512, elapsedMs: 0 }),
-      true,
     );
   });
 });

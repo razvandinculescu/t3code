@@ -1345,7 +1345,7 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness();
     const initial = await harness.readModel();
 
-    for (const streamKind of ["reasoning_text", "command_output", "file_change_output"] as const) {
+    for (const streamKind of ["command_output", "file_change_output"] as const) {
       harness.emit({
         type: "content.delta",
         eventId: asEventId(`evt-ignored-${streamKind}`),
@@ -1419,6 +1419,420 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(message?.text).toBe("hello world");
     expect(message?.streaming).toBe(false);
+  });
+
+  it("streams reasoning deltas into a finalized reasoning message", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    for (const delta of ["Weighing ", "the options"]) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-reasoning-${delta.trim()}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-reasoning"),
+        itemId: asItemId("item-r1"),
+        payload: { streamKind: "reasoning_text", delta },
+      });
+    }
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-reasoning-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("item-r1"),
+      payload: { itemType: "reasoning", status: "completed" },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.role === "reasoning" &&
+          !message.streaming &&
+          message.text === "Weighing the options",
+      ),
+    );
+    const message = thread.messages.find(
+      (entry: ProviderRuntimeTestMessage) => entry.role === "reasoning",
+    );
+    expect(message?.text).toBe("Weighing the options");
+    expect(message?.streaming).toBe(false);
+    expect(thread.messages.some((entry) => entry.role === "assistant")).toBe(false);
+  });
+
+  it("shows readable thinking before a paragraph boundary and paces following fragments", async () => {
+    const harness = await createHarness({ serverSettings: { responseStreamingMode: "token" } });
+    const emit = async (id: string, delta: string) => {
+      await harness.emitAndDrain([
+        {
+          type: "content.delta",
+          eventId: asEventId(id),
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-paced"),
+          itemId: asItemId("thinking-paced"),
+          payload: { streamKind: "reasoning_summary_text", delta },
+        },
+      ]);
+    };
+    const messages = async () =>
+      (await harness.readModel()).threads
+        .find((thread) => thread.id === asThreadId("thread-1"))!
+        .messages.filter((message) => message.role === "reasoning");
+    await emit("paced-1", "I");
+    expect(await messages()).toHaveLength(0);
+    await emit("paced-2", " will inspect the implementation.");
+    expect(await messages()).toMatchObject([
+      { text: "I will inspect the implementation.", streaming: true },
+    ]);
+    await emit("paced-3", " Next");
+    expect((await messages())[0]?.text).toBe("I will inspect the implementation.");
+    harness.advanceClock(400);
+    await emit("paced-4", " step".repeat(25));
+    expect((await messages())[0]?.text).toBe(
+      "I will inspect the implementation. Next" + " step".repeat(25),
+    );
+  });
+
+  it.each(["turn.completed", "turn.aborted"] as const)(
+    "seals thinking once on %s and ignores a late completion",
+    async (terminal) => {
+      const harness = await createHarness();
+      const base = {
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-terminal-reasoning"),
+      };
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "content.delta",
+          eventId: asEventId("terminal-reasoning-delta"),
+          itemId: asItemId("terminal-reasoning-item"),
+          payload: { streamKind: "reasoning_summary_text", delta: "Thought before stopping" },
+        },
+      ]);
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: terminal,
+          eventId: asEventId("terminal-reasoning-stop"),
+          payload: terminal === "turn.completed" ? { state: "completed" } : {},
+        },
+      ]);
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "item.completed",
+          eventId: asEventId("terminal-reasoning-late"),
+          itemId: asItemId("terminal-reasoning-item"),
+          payload: {
+            itemType: "reasoning",
+            status: "completed",
+            detail: "Thought before stopping",
+          },
+        },
+      ]);
+      const thread = (await harness.readModel()).threads.find(
+        (thread) => thread.id === asThreadId("thread-1"),
+      )!;
+      expect(thread.messages.filter((message) => message.role === "reasoning")).toMatchObject([
+        { text: "Thought before stopping", streaming: false },
+      ]);
+      expect(thread.messages.filter((message) => message.role === "reasoning")).toHaveLength(1);
+      expect(thread.activities.some((activity) => activity.id === "terminal-reasoning-late")).toBe(
+        false,
+      );
+    },
+  );
+
+  it("keeps a reasoning summary's parts apart", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    for (const [summaryIndex, delta] of [
+      [0, "**First**"],
+      [1, "**Second**"],
+    ] as const) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-summary-${summaryIndex}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-summary"),
+        itemId: asItemId("item-s1"),
+        payload: { streamKind: "reasoning_summary_text", delta, summaryIndex },
+      });
+    }
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-summary-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-summary"),
+      itemId: asItemId("item-s1"),
+      payload: { itemType: "reasoning", status: "completed" },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.role === "reasoning" &&
+          !message.streaming &&
+          message.text === "**First**\n\n**Second**",
+      ),
+    );
+    const message = thread.messages.find(
+      (entry: ProviderRuntimeTestMessage) => entry.role === "reasoning",
+    );
+    expect(message?.text).toBe("**First**\n\n**Second**");
+  });
+
+  it("uses a reasoning item's detail when no reasoning deltas were streamed", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-reasoning-snapshot"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-snapshot"),
+      itemId: asItemId("item-snapshot"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        detail: "reasoning reported in one piece",
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.role === "reasoning" &&
+          !message.streaming &&
+          message.text === "reasoning reported in one piece",
+      ),
+    );
+    const message = thread.messages.find(
+      (entry: ProviderRuntimeTestMessage) => entry.role === "reasoning",
+    );
+    expect(message?.text).toBe("reasoning reported in one piece");
+
+    for (const [index, detail] of ["", " \n\t"].entries()) {
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId(`evt-empty-reasoning-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId(`turn-empty-${index}`),
+        itemId: asItemId(`item-empty-${index}`),
+        payload: { itemType: "reasoning", status: "completed", detail },
+      });
+    }
+
+    // A repeated completion must rewrite that row, not add a second copy.
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-reasoning-snapshot-repeat"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-snapshot"),
+      itemId: asItemId("item-snapshot"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        detail: "reasoning reported in one piece",
+      },
+    });
+    await harness.drain();
+    const after = await harness.readModel();
+    const repeated = after.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      repeated?.messages.filter((entry: ProviderRuntimeTestMessage) => entry.role === "reasoning")
+        .length,
+    ).toBe(1);
+  });
+
+  it("keeps interleaved summary and raw reasoning in separate blocks", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    // Distinct timestamps: blocks are ordered by when the provider opened them.
+    for (const [tag, at, streamKind, delta] of [
+      ["a", "2026-01-01T00:00:01.000Z", "reasoning_summary_text", "summary one"],
+      ["b", "2026-01-01T00:00:02.000Z", "reasoning_text", "raw one"],
+      ["c", "2026-01-01T00:00:03.000Z", "reasoning_summary_text", "summary two"],
+    ] as const) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-interleaved-${tag}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: at,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-interleaved"),
+        itemId: asItemId("item-interleaved"),
+        payload: { streamKind, delta },
+      });
+    }
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-interleaved-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-interleaved"),
+      itemId: asItemId("item-interleaved"),
+      payload: { itemType: "reasoning", status: "completed" },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.messages.filter(
+          (message: ProviderRuntimeTestMessage) =>
+            message.role === "reasoning" && !message.streaming,
+        ).length === 3,
+    );
+    const reasoning = thread.messages.filter(
+      (entry: ProviderRuntimeTestMessage) => entry.role === "reasoning",
+    );
+    expect(reasoning.map((entry) => entry.text)).toEqual(["summary one", "raw one", "summary two"]);
+    expect(new Set(reasoning.map((entry) => entry.id)).size).toBe(3);
+  });
+
+  it.each([true, false])(
+    "closes reasoning when the assistant answers (deltas: %s)",
+    async (withDeltas) => {
+      const harness = await createHarness();
+      const now = "2026-01-01T00:00:00.000Z";
+
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId("evt-think-before-answer"),
+        provider: ProviderDriverKind.make("claude"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-answer"),
+        payload: { streamKind: "reasoning_text", delta: "thinking it through" },
+      });
+      if (withDeltas) {
+        harness.emit({
+          type: "content.delta",
+          eventId: asEventId("evt-answer-after-think"),
+          provider: ProviderDriverKind.make("claude"),
+          createdAt: now,
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-answer"),
+          itemId: asItemId("item-a1"),
+          payload: { streamKind: "assistant_text", delta: "the answer" },
+        });
+      }
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId("evt-answer-completed"),
+        provider: ProviderDriverKind.make("claude"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-answer"),
+        itemId: asItemId("item-a1"),
+        payload: {
+          itemType: "assistant_message",
+          status: "completed",
+          ...(!withDeltas ? { detail: "the answer" } : {}),
+        },
+      });
+
+      const thread = await waitForThread(
+        harness.readModel,
+        (entry) =>
+          entry.messages.some(
+            (message: ProviderRuntimeTestMessage) =>
+              message.role === "reasoning" && !message.streaming,
+          ) &&
+          entry.messages.some(
+            (message: ProviderRuntimeTestMessage) =>
+              message.role === "assistant" && !message.streaming,
+          ),
+      );
+      const reasoning = thread.messages.find(
+        (entry: ProviderRuntimeTestMessage) => entry.role === "reasoning",
+      );
+      expect(reasoning?.text).toBe("thinking it through");
+      expect(reasoning?.streaming).toBe(false);
+      const assistant = thread.messages.find(
+        (entry: ProviderRuntimeTestMessage) => entry.role === "assistant",
+      );
+      expect(assistant?.text).toBe("the answer");
+    },
+  );
+
+  it("starts a new reasoning block after tool work", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-think-before-tool"),
+      provider: ProviderDriverKind.make("claude"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-tooled"),
+      payload: { streamKind: "reasoning_text", delta: "before the tool" },
+    });
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-tool-between-thoughts"),
+      provider: ProviderDriverKind.make("claude"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-tooled"),
+      itemId: asItemId("item-tool-1"),
+      payload: { itemType: "command_execution", status: "inProgress", title: "ls" },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-think-after-tool"),
+      provider: ProviderDriverKind.make("claude"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-tooled"),
+      payload: { streamKind: "reasoning_text", delta: "after the tool" },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-second-thought-completed"),
+      provider: ProviderDriverKind.make("claude"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-tooled"),
+      payload: { itemType: "reasoning", status: "completed" },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.messages.filter(
+          (message: ProviderRuntimeTestMessage) =>
+            message.role === "reasoning" && !message.streaming,
+        ).length === 2,
+    );
+    const reasoning = thread.messages.filter(
+      (entry: ProviderRuntimeTestMessage) => entry.role === "reasoning",
+    );
+    expect(reasoning.map((entry) => entry.text)).toEqual(["before the tool", "after the tool"]);
+    expect(reasoning[0]?.streaming).toBe(false);
   });
 
   it("uses assistant item completion detail when no assistant deltas were streamed", async () => {
@@ -1509,7 +1923,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(rawOutput?.content).toBe('import * as Effect from "effect/Effect"\n');
   });
 
-  it("keeps reasoning item lifecycle activities with the full thinking detail", async () => {
+  it("stores legacy reasoning completion as a message without duplicate activities", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
     const thinking = "g".repeat(400);
@@ -1563,40 +1977,17 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-completed",
-      ),
-    );
-
-    const started = thread.activities.find(
-      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-reasoning-started",
-    );
-    expect(started?.kind).toBe("tool.started");
-    const startedPayload = started?.payload as Record<string, unknown> | undefined;
-    expect(startedPayload?.itemType).toBe("reasoning");
-
-    const updated = thread.activities.find(
-      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-reasoning-updated",
-    );
-    expect(updated?.kind).toBe("tool.updated");
-    const updatedPayload = updated?.payload as Record<string, unknown> | undefined;
-    expect(updatedPayload?.itemType).toBe("reasoning");
-    // The thinking text is the payload, not a preview: no 180-char truncation.
-    expect(updatedPayload?.detail).toBe(thinking);
-
-    const completed = thread.activities.find(
-      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-reasoning-completed",
-    );
-    expect(completed?.kind).toBe("tool.completed");
-    const completedPayload = completed?.payload as Record<string, unknown> | undefined;
-    expect(completedPayload?.itemType).toBe("reasoning");
-    expect(completedPayload?.detail).toBe(thinking);
-    const completedData = completedPayload?.data as { toolCallId?: string } | undefined;
-    expect(completedData?.toolCallId).toBe("item-reasoning-1");
+    await harness.drain();
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === asThreadId("thread-1"),
+    )!;
+    expect(thread.messages.filter((entry) => entry.role === "reasoning")).toMatchObject([
+      { text: thinking, streaming: false },
+    ]);
+    expect(thread.activities.filter((entry) => entry.id.startsWith("evt-reasoning"))).toEqual([]);
   });
 
-  it("drops reasoning events without a renderable title (Codex summaryPartAdded shape)", async () => {
+  it("ignores empty reasoning lifecycle noise and preserves completion text", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
@@ -1650,22 +2041,14 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-claude-reasoning-completed",
-      ),
-    );
-
-    expect(
-      thread.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-codex-reasoning-updated",
-      ),
-    ).toBe(false);
-    expect(
-      thread.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-codex-reasoning-completed",
-      ),
-    ).toBe(false);
+    await harness.drain();
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === asThreadId("thread-1"),
+    )!;
+    expect(thread.messages.filter((entry) => entry.role === "reasoning")).toMatchObject([
+      { text: "done thinking", streaming: false },
+    ]);
+    expect(thread.activities.filter((entry) => entry.id.includes("reasoning"))).toEqual([]);
   });
 
   it("normalizes command execution activities to ran-command summaries", async () => {

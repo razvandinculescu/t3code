@@ -2005,6 +2005,122 @@ describe("deriveMessagesTimelineRows", () => {
     expect(rows.map((row) => row.id)).toEqual(["turn-fold:turn-1", "assistant-final-entry"]);
   });
 
+  const reasoningEntry = (id: string, at: string, turnId: string | null) => ({
+    id,
+    kind: "message" as const,
+    createdAt: at,
+    message: {
+      id: id as never,
+      role: "reasoning" as const,
+      text: "weighing it up",
+      turnId: turnId as never,
+      createdAt: at,
+      updatedAt: at,
+      streaming: false,
+    },
+  });
+
+  const answerEntry = (id: string, at: string, turnId: string) => ({
+    id,
+    kind: "message" as const,
+    createdAt: at,
+    message: {
+      id: id as never,
+      role: "assistant" as const,
+      text: "the answer",
+      turnId: turnId as never,
+      createdAt: at,
+      updatedAt: at,
+      streaming: false,
+    },
+  });
+
+  const toolEntry = (id: string, at: string, turnId: string) => ({
+    id,
+    kind: "work" as const,
+    createdAt: at,
+    entry: {
+      id,
+      createdAt: at,
+      turnId: turnId as never,
+      label: "Ran a command",
+      tone: "tool" as const,
+    },
+  });
+
+  it("keeps a thought-only turn out of the work fold", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        reasoningEntry("reasoning-entry", "2026-01-01T00:00:01Z", "turn-1"),
+        answerEntry("assistant-entry", "2026-01-01T00:00:02Z", "turn-1"),
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+
+    expect(rows.some((row) => row.kind === "turn-fold")).toBe(false);
+    expect(rows.map((row) => row.id)).toContain("reasoning-entry");
+  });
+
+  it.each([false, true])(
+    "respects default reasoning expansion when folding a turn (%s)",
+    (reasoningExpandedByDefault) => {
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries: [
+          reasoningEntry("reasoning-entry", "2026-01-01T00:00:01Z", "turn-1"),
+          toolEntry("tool-entry", "2026-01-01T00:00:02Z", "turn-1"),
+          answerEntry("assistant-entry", "2026-01-01T00:00:03Z", "turn-1"),
+        ],
+        reasoningExpandedByDefault,
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+      });
+
+      expect(rows.some((row) => row.kind === "turn-fold")).toBe(true);
+      expect(rows.some((row) => row.id === "reasoning-entry")).toBe(reasoningExpandedByDefault);
+    },
+  );
+
+  it("still folds a lone trailing tool call when a thought follows the answer", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        toolEntry("tool-before", "2026-01-01T00:00:01Z", "turn-1"),
+        answerEntry("assistant-entry", "2026-01-01T00:00:02Z", "turn-1"),
+        reasoningEntry("reasoning-after", "2026-01-01T00:00:03Z", "turn-1"),
+        toolEntry("tool-after", "2026-01-01T00:00:04Z", "turn-1"),
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+
+    const ids = rows.map((row) => row.id);
+    expect(ids).not.toContain("tool-after");
+    expect(ids).not.toContain("reasoning-after");
+  });
+
+  it("does not let a stranded streaming thought hold a settled turn open", () => {
+    const stranded = reasoningEntry("reasoning-stranded", "2026-01-01T00:00:01Z", "turn-1");
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        { ...stranded, message: { ...stranded.message, streaming: true } },
+        toolEntry("tool-entry", "2026-01-01T00:00:02Z", "turn-1"),
+        answerEntry("assistant-entry", "2026-01-01T00:00:03Z", "turn-1"),
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+
+    expect(rows.some((row) => row.kind === "turn-fold")).toBe(true);
+  });
+
   it("derives a sane duration for a steer-superseded turn with one instant commentary message", () => {
     // A steer ends the previous turn early: its only message completes the
     // instant it is created, and trailing work entries land after it. The
@@ -3794,6 +3910,41 @@ describe("timeline row size buckets", () => {
         reasoningExpandedByDefault: true,
       }),
     ).toBe("work:l");
+  });
+
+  it("sizes new reasoning messages from defaults and explicit disclosure overrides", () => {
+    const row: MessagesTimelineRow = {
+      kind: "message",
+      id: "thought",
+      createdAt: "2026-09-16T10:00:00Z",
+      message: {
+        id: MessageId.make("thought"),
+        role: "reasoning",
+        text: "x".repeat(9000),
+        turnId: null,
+        streaming: false,
+        createdAt: "2026-09-16T10:00:00Z",
+        updatedAt: "2026-09-16T10:00:00Z",
+      },
+      durationStart: "2026-09-16T10:00:00Z",
+      showAssistantMeta: false,
+      showAssistantCopyButton: false,
+      assistantCopyStreaming: false,
+    };
+    expect(resolveTimelineRowItemType(row, collapsed)).toBe("message:reasoning:s");
+    expect(resolveTimelineRowItemType(row, expanded)).toBe("message:reasoning:xl");
+    expect(
+      resolveTimelineRowItemType(row, {
+        ...expanded,
+        reasoningExpansionOverrides: new Map([["thought", false]]),
+      }),
+    ).toBe("message:reasoning:s");
+    expect(
+      resolveTimelineRowItemType(row, {
+        ...collapsed,
+        reasoningExpansionOverrides: new Map([["thought", true]]),
+      }),
+    ).toBe("message:reasoning:xl");
   });
 
   it("counts grouped image previews only when the row body is expanded", () => {

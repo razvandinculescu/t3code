@@ -13,7 +13,6 @@ import {
   type CanonicalRequestType,
   type CodexSettings,
   ProviderDriverKind,
-  ProviderItemId,
   type ProviderEvent,
   ProviderInstanceId,
   type ProviderRuntimeEvent,
@@ -1055,19 +1054,6 @@ function mapItemLifecycle(
           ? item.status
           : "completed"
         : undefined;
-  // Reasoning items get the renderable identity the ingestion guard and the
-  // client collapse need: data.toolCallId ties started/updated/completed to
-  // one row (same contract the Claude adapter emits for thinking blocks).
-  const itemId = "id" in item && typeof item.id === "string" ? item.id : undefined;
-  const data =
-    event.payload !== undefined
-      ? itemType === "reasoning" &&
-        itemId !== undefined &&
-        typeof event.payload === "object" &&
-        event.payload !== null
-        ? { ...(event.payload as Record<string, unknown>), toolCallId: itemId }
-        : event.payload
-      : undefined;
 
   return {
     ...runtimeEventBase(event, canonicalThreadId),
@@ -1078,7 +1064,7 @@ function mapItemLifecycle(
       ...(title ? { title } : {}),
       ...(detail ? { detail } : {}),
       ...toolPresentation,
-      ...(data !== undefined ? { data } : {}),
+      ...(event.payload !== undefined ? { data: event.payload } : {}),
     },
   };
 }
@@ -1347,133 +1333,9 @@ function mapCollabAgentEvent(
   }
 }
 
-/**
- * Live reasoning accumulator. Codex streams thinking as bare content deltas
- * (`item/reasoning/summaryTextDelta`, `item/reasoning/textDelta`) with no item
- * lifecycle shape of their own, so without this the user only ever saw the
- * final summary at `item.completed`. We accumulate per itemId and emit
- * throttled `item.updated` events in the renderable reasoning shape (title +
- * data.toolCallId) — the same contract the Claude adapter emits for thinking
- * blocks: first update goes out as soon as any text exists, later ones every
- * CODEX_REASONING_UPDATE_CHUNK chars.
- */
-interface CodexReasoningParts {
-  readonly summary: Map<number, string>;
-  readonly content: Map<number, string>;
-}
-
-interface CodexReasoningStreamState {
-  /** itemId → indexed parts, summary and content apart (see compose note). */
-  readonly partsByItemId: Map<string, CodexReasoningParts>;
-  /** itemId → composed text length at the last emitted item.updated (throttles live updates). */
-  readonly lastEmittedLengthByItemId: Map<string, number>;
-  /** Native completions matching the latest synthetic turn-end seal are dropped. */
-  readonly syntheticallyCompletedItemKeys: Set<string>;
-}
-
-const CODEX_REASONING_UPDATE_CHUNK = 512;
-
-function composeReasoningStreamParts(parts: CodexReasoningParts): string {
-  const byIndex = (a: [number, string], b: [number, string]) => a[0] - b[0];
-  return [
-    ...Array.from(parts.summary.entries()).sort(byIndex),
-    ...Array.from(parts.content.entries()).sort(byIndex),
-  ]
-    .map(([, value]) => value)
-    .join("\n\n");
-}
-
-function reasoningStreamIdentityKey(turnId: ProviderEvent["turnId"], itemId: string): string {
-  return `${turnId ?? "no-turn"}\u001f${itemId}`;
-}
-
-/**
- * Turn terminals can arrive without item/completed after an interruption.
- * Seal every live reasoning row before the terminal event so persisted work
- * never remains inProgress, then clear the accumulator for the next turn.
- */
-function completeOpenReasoningStreams(
-  state: CodexReasoningStreamState,
-  event: ProviderEvent,
-  canonicalThreadId: ThreadId,
-): ReadonlyArray<ProviderRuntimeEvent> {
-  const base = runtimeEventBase(event, canonicalThreadId);
-  // Provider notifications are ordered. Retaining only the latest terminal's
-  // identities bounds this defensive dedup state while covering native
-  // completions delivered immediately after their turn terminal.
-  state.syntheticallyCompletedItemKeys.clear();
-  const completed = Array.from(state.partsByItemId, ([itemId, parts]) => {
-    const detail = composeReasoningStreamParts(parts);
-    state.syntheticallyCompletedItemKeys.add(reasoningStreamIdentityKey(event.turnId, itemId));
-    return {
-      ...base,
-      eventId: EventId.make(`${event.id}:reasoning:${itemId}:completed`),
-      itemId: RuntimeItemId.make(itemId),
-      providerRefs: {
-        ...base.providerRefs,
-        providerItemId: ProviderItemId.make(itemId),
-      },
-      type: "item.completed",
-      payload: {
-        itemType: "reasoning",
-        status: "completed",
-        title: "Reasoning",
-        ...(detail.trim().length > 0 ? { detail } : {}),
-        data: { toolCallId: itemId },
-      },
-    } satisfies ProviderRuntimeEvent;
-  });
-  state.partsByItemId.clear();
-  state.lastEmittedLengthByItemId.clear();
-  return completed;
-}
-
-function accumulateReasoningDeltaEvent(
-  state: CodexReasoningStreamState,
-  event: ProviderEvent,
-  canonicalThreadId: ThreadId,
-  delta: string,
-  part: { readonly kind: "summary" | "content"; readonly index: number | undefined },
-): ProviderRuntimeEvent | undefined {
-  const itemId = event.itemId;
-  if (itemId === undefined) {
-    return undefined;
-  }
-  // Parts stream interleaved (summary sections, content blocks), each with
-  // its own index — track them separately and compose summary-then-content
-  // in index order, the same order reasoningItemText emits at completion,
-  // or the live text reshuffles when the block seals.
-  let parts = state.partsByItemId.get(itemId);
-  if (!parts) {
-    parts = { summary: new Map(), content: new Map() };
-    state.partsByItemId.set(itemId, parts);
-  }
-  const bucket = part.kind === "summary" ? parts.summary : parts.content;
-  const index = part.index ?? 0;
-  bucket.set(index, (bucket.get(index) ?? "") + delta);
-  const text = composeReasoningStreamParts(parts);
-  const lastEmittedLength = state.lastEmittedLengthByItemId.get(itemId) ?? 0;
-  if (lastEmittedLength > 0 && text.length - lastEmittedLength < CODEX_REASONING_UPDATE_CHUNK) {
-    return undefined;
-  }
-  state.lastEmittedLengthByItemId.set(itemId, text.length);
-  return {
-    ...runtimeEventBase(event, canonicalThreadId),
-    type: "item.updated",
-    payload: {
-      itemType: "reasoning",
-      status: "inProgress",
-      title: "Reasoning",
-      detail: text,
-      data: { toolCallId: itemId },
-    },
-  };
-}
-
 function mapToRuntimeEvents(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
-  reasoningStreams?: CodexReasoningStreamState,
 ): ReadonlyArray<ProviderRuntimeEvent> {
   if (event.kind === "notification" && event.method.startsWith("collabAgent/")) {
     return mapCollabAgentEvent(event, canonicalThreadId);
@@ -1771,12 +1633,8 @@ function mapToRuntimeEvents(
     if (!payload) {
       return [];
     }
-    const reasoningCompletions = reasoningStreams
-      ? completeOpenReasoningStreams(reasoningStreams, event, canonicalThreadId)
-      : [];
     const errorMessage = trimText(payload.turn.error?.message);
     return [
-      ...reasoningCompletions,
       {
         ...runtimeEventBase(event, canonicalThreadId),
         type: "turn.completed",
@@ -1789,11 +1647,7 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "turn/aborted") {
-    const reasoningCompletions = reasoningStreams
-      ? completeOpenReasoningStreams(reasoningStreams, event, canonicalThreadId)
-      : [];
     return [
-      ...reasoningCompletions,
       {
         ...runtimeEventBase(event, canonicalThreadId),
         type: "turn.aborted",
@@ -1874,20 +1728,6 @@ function mapToRuntimeEvents(
       ];
     }
     const itemType = toCanonicalItemType(item.type);
-    const completedItemId =
-      event.itemId ?? ("id" in item && typeof item.id === "string" ? item.id : undefined);
-    if (
-      itemType === "reasoning" &&
-      completedItemId !== undefined &&
-      reasoningStreams?.syntheticallyCompletedItemKeys.has(
-        reasoningStreamIdentityKey(event.turnId, completedItemId),
-      )
-    ) {
-      // A terminal already sealed this row. Persisting the provider's late
-      // native completion would create a second completed row that clients
-      // deliberately refuse to fold into the first terminal row.
-      return [];
-    }
     if (itemType === "plan") {
       const detail = itemDetail(itemType, item);
       if (!detail) {
@@ -1904,17 +1744,6 @@ function mapToRuntimeEvents(
       ];
     }
     const completed = mapItemLifecycle(event, canonicalThreadId, "item.completed");
-    // The reasoning item is sealed; drop its live accumulator so a recycled
-    // itemId can never inherit a previous item's text.
-    if (
-      reasoningStreams &&
-      completedItemId !== undefined &&
-      completed?.type === "item.completed" &&
-      completed.payload.itemType === "reasoning"
-    ) {
-      reasoningStreams.partsByItemId.delete(completedItemId);
-      reasoningStreams.lastEmittedLengthByItemId.delete(completedItemId);
-    }
     if (!completed || itemType !== "context_compaction") {
       return completed ? [completed] : [];
     }
@@ -2032,22 +1861,17 @@ function mapToRuntimeEvents(
     if (!delta || delta.length === 0) {
       return [];
     }
-    const contentDelta: ProviderRuntimeEvent = {
-      ...runtimeEventBase(event, canonicalThreadId),
-      type: "content.delta",
-      payload: {
-        streamKind: "reasoning_summary_text",
-        delta,
-        ...(payload ? { summaryIndex: payload.summaryIndex } : {}),
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "content.delta",
+        payload: {
+          streamKind: "reasoning_summary_text",
+          delta,
+          ...(payload ? { summaryIndex: payload.summaryIndex } : {}),
+        },
       },
-    };
-    const reasoningUpdate = reasoningStreams
-      ? accumulateReasoningDeltaEvent(reasoningStreams, event, canonicalThreadId, delta, {
-          kind: "summary",
-          index: payload?.summaryIndex,
-        })
-      : undefined;
-    return reasoningUpdate ? [contentDelta, reasoningUpdate] : [contentDelta];
+    ];
   }
 
   if (event.method === "item/reasoning/textDelta") {
@@ -2056,22 +1880,17 @@ function mapToRuntimeEvents(
     if (!delta || delta.length === 0) {
       return [];
     }
-    const contentDelta: ProviderRuntimeEvent = {
-      ...runtimeEventBase(event, canonicalThreadId),
-      type: "content.delta",
-      payload: {
-        streamKind: "reasoning_text",
-        delta,
-        ...(payload ? { contentIndex: payload.contentIndex } : {}),
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "content.delta",
+        payload: {
+          streamKind: "reasoning_text",
+          delta,
+          ...(payload ? { contentIndex: payload.contentIndex } : {}),
+        },
       },
-    };
-    const reasoningUpdate = reasoningStreams
-      ? accumulateReasoningDeltaEvent(reasoningStreams, event, canonicalThreadId, delta, {
-          kind: "content",
-          index: payload?.contentIndex,
-        })
-      : undefined;
-    return reasoningUpdate ? [contentDelta, reasoningUpdate] : [contentDelta];
+    ];
   }
 
   if (event.method === "item/mcpToolCall/progress") {
@@ -2539,11 +2358,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         // this a child of `startSession`, and Effect interrupts a fiber's
         // children when it completes, so the consumer died on return and every
         // runtime event the session emitted afterwards was dropped.
-        const reasoningStreams: CodexReasoningStreamState = {
-          partsByItemId: new Map(),
-          lastEmittedLengthByItemId: new Map(),
-          syntheticallyCompletedItemKeys: new Set(),
-        };
         const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
           Effect.gen(function* () {
             yield* writeNativeEvent(event);
@@ -2619,38 +2433,36 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }
             }
 
-            const mappedEvents = mapToRuntimeEvents(event, event.threadId, reasoningStreams).map(
-              (runtimeEvent) => {
-                if (runtimeEvent.type === "turn.completed" && runtimeEvent.turnId) {
-                  return {
-                    ...runtimeEvent,
-                    payload: {
-                      ...runtimeEvent.payload,
-                      ...(usageLimitMessage ? { errorMessage: usageLimitMessage } : {}),
-                      tokenUsage: completeCodexTurnTokenUsage(
-                        turnTokenUsage,
-                        String(runtimeEvent.turnId),
-                        runtimeEvent.payload.state === "completed",
-                      ),
-                    },
-                  } satisfies ProviderRuntimeEvent;
-                }
-                if (runtimeEvent.type === "turn.aborted" && runtimeEvent.turnId) {
-                  return {
-                    ...runtimeEvent,
-                    payload: {
-                      ...runtimeEvent.payload,
-                      tokenUsage: completeCodexTurnTokenUsage(
-                        turnTokenUsage,
-                        String(runtimeEvent.turnId),
-                        false,
-                      ),
-                    },
-                  } satisfies ProviderRuntimeEvent;
-                }
-                return runtimeEvent;
-              },
-            );
+            const mappedEvents = mapToRuntimeEvents(event, event.threadId).map((runtimeEvent) => {
+              if (runtimeEvent.type === "turn.completed" && runtimeEvent.turnId) {
+                return {
+                  ...runtimeEvent,
+                  payload: {
+                    ...runtimeEvent.payload,
+                    ...(usageLimitMessage ? { errorMessage: usageLimitMessage } : {}),
+                    tokenUsage: completeCodexTurnTokenUsage(
+                      turnTokenUsage,
+                      String(runtimeEvent.turnId),
+                      runtimeEvent.payload.state === "completed",
+                    ),
+                  },
+                } satisfies ProviderRuntimeEvent;
+              }
+              if (runtimeEvent.type === "turn.aborted" && runtimeEvent.turnId) {
+                return {
+                  ...runtimeEvent,
+                  payload: {
+                    ...runtimeEvent.payload,
+                    tokenUsage: completeCodexTurnTokenUsage(
+                      turnTokenUsage,
+                      String(runtimeEvent.turnId),
+                      false,
+                    ),
+                  },
+                } satisfies ProviderRuntimeEvent;
+              }
+              return runtimeEvent;
+            });
             const runtimeEvents = usageLimitError
               ? [usageLimitError, ...mappedEvents]
               : mappedEvents;

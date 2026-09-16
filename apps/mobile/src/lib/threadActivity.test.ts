@@ -2498,6 +2498,72 @@ describe("buildThreadFeed", () => {
     expect(deriveThreadFeedPresentation(feed, null, new Set())).toEqual(collapsed);
   });
 
+  it.each([
+    { reasoningExpandedByDefault: false, workLogExpandedByDefault: false },
+    { reasoningExpandedByDefault: true, workLogExpandedByDefault: false },
+    { reasoningExpandedByDefault: false, workLogExpandedByDefault: true },
+  ])("keeps new reasoning messages visible according to expansion defaults: %j", (defaults) => {
+    const turnId = TurnId.make("turn-new-reasoning");
+    const thread = makeThread({
+      id: ThreadId.make("thread-new-reasoning"),
+      projectId: ProjectId.make("project-1"),
+      title: "Thinking",
+      latestTurn: {
+        turnId,
+        state: "completed",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: "2026-04-01T00:00:05.000Z",
+        assistantMessageId: MessageId.make("answer"),
+      },
+      messages: [
+        {
+          id: MessageId.make("thought"),
+          role: "reasoning",
+          text: "Checking the source",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:01.000Z",
+          updatedAt: "2026-04-01T00:00:02.000Z",
+        },
+        {
+          id: MessageId.make("answer"),
+          role: "assistant",
+          text: "Done",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:04.000Z",
+          updatedAt: "2026-04-01T00:00:05.000Z",
+        },
+      ],
+      activities: [
+        makeActivity({
+          id: EventId.make("read"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Read source",
+          createdAt: "2026-04-01T00:00:03.000Z",
+          turnId,
+          payload: { itemType: "file_read", status: "completed" },
+        }),
+      ],
+    });
+    const rows = deriveThreadFeedPresentation(
+      buildThreadFeed(thread),
+      thread.latestTurn,
+      new Set(),
+      new Set(),
+      null,
+      defaults,
+    );
+    expect(rows.some((row) => row.type === "message" && row.message.id === "thought")).toBe(
+      defaults.reasoningExpandedByDefault || defaults.workLogExpandedByDefault,
+    );
+    expect(
+      rows.filter((row) => row.type === "message" && row.message.id === "answer"),
+    ).toHaveLength(1);
+  });
+
   it("applies mobile reasoning and work-log expansion defaults with manual collapse overrides", () => {
     const turnId = TurnId.make("turn-expansion-defaults");
     const activity = (
