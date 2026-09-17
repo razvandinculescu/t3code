@@ -1,3 +1,8 @@
+import {
+  WorktreeWorkingHeader,
+  WorktreeSetupCard,
+  type WorktreeSetupCardProps,
+} from "./worktree-setup-card";
 import * as Haptics from "expo-haptics";
 import { useAtomValue } from "@effect/atom-react";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
@@ -244,6 +249,8 @@ function isFreshTimestamp(input: string): boolean {
 }
 
 export interface ThreadFeedProps {
+  readonly worktreeSetup?: WorktreeSetupCardProps | null;
+  readonly setupWorkingStartedAt?: string | null;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
   readonly dispatchingMessageId: MessageId | null;
   readonly onEditPendingMessage: (message: QueuedThreadMessage) => void;
@@ -884,6 +891,7 @@ function MarkdownCodeBlock(props: {
       >
         <NativeText
           selectable
+          selectionColorClassName={Platform.OS === "android" ? "accent-primary/32" : undefined}
           className="font-mono"
           style={{
             color: props.textColor,
@@ -1482,14 +1490,11 @@ function renderFeedEntry(
   if (entry.type === "message") {
     const { message } = entry;
     if (message.role === "reasoning") {
-      // Only the live turn may claim to still be thinking, and only while the
-      // thread is actually working: a block left open by a crashed provider
-      // must not shimmer on a turn that settled long ago. Same test as web.
+      const messages = entry.reasoningMessages ?? [message];
       const liveReasoning =
-        Boolean(message.streaming) &&
         props.isWorking &&
-        message.turnId !== null &&
-        message.turnId === props.unsettledTurnId;
+        message.turnId === props.unsettledTurnId &&
+        messages.some((reasoningMessage) => reasoningMessage.streaming);
       return (
         <ThreadReasoningRow
           rowSizing={props.workRowSizing}
@@ -1498,20 +1503,25 @@ function renderFeedEntry(
             props.reasoningExpansionOverrides.get(message.id) ??
             (props.reasoningExpandedByDefault || props.workLogExpandedByDefault)
           }
-          label={liveReasoning ? "Thinking" : "Thought"}
+          label={`${liveReasoning ? "Thinking" : "Thought"}${messages.length > 1 ? ` (×${messages.length})` : ""}`}
           streaming={liveReasoning}
           onToggle={() => props.onToggleReasoning(message.id)}
         >
           <MarkdownImageAvailableWidthContext
             value={props.markdownContentWidth - REASONING_CONTENT_INSET}
           >
-            <AssistantMarkdownContent
-              markdown={message.text}
-              markdownStyles={markdownStyles.assistant}
-              linkHandlers={props.markdownLinkHandlers}
-              renderImage={props.renderMarkdownImage}
-              skills={props.skills}
-            />
+            <View className="gap-3">
+              {messages.map((reasoningMessage) => (
+                <AssistantMarkdownContent
+                  key={reasoningMessage.id}
+                  markdown={reasoningMessage.text}
+                  markdownStyles={markdownStyles.assistant}
+                  linkHandlers={props.markdownLinkHandlers}
+                  renderImage={props.renderMarkdownImage}
+                  skills={props.skills}
+                />
+              ))}
+            </View>
           </MarkdownImageAvailableWidthContext>
         </ThreadReasoningRow>
       );
@@ -2291,6 +2301,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // even when the final message update arrives before the turn settles.
   const listAppearanceData = useMemo(
     () => ({
+      worktreeSetup: props.worktreeSetup,
+      setupWorkingStartedAt: props.setupWorkingStartedAt,
       dispatchingMessageId: props.dispatchingMessageId,
       unsettledTurnId,
       copiedRowId,
@@ -2305,6 +2317,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       viewportWidth,
     }),
     [
+      props.worktreeSetup,
+      props.setupWorkingStartedAt,
       props.dispatchingMessageId,
       unsettledTurnId,
       copiedRowId,
@@ -2488,6 +2502,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.feed,
       props.latestTurn,
     ],
+  );
+  const setupAnchorIndex = presentedFeed.findIndex(
+    (entry) => entry.type === "message" && entry.message.role === "user",
   );
   // The empty↔filled key below remounts the list and resets its imperative
   // content-inset override. Seed the fresh instance synchronously with the
@@ -2690,8 +2707,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
 
   const onToggleReasoning = useCallback(
     (messageId: string) => {
-      // The anchor must be the feed row id, which for a message row is the
-      // message id, or position restoration is skipped for every row.
+      // Reasoning details use their own row within the expanded activity history.
       suspendEndScrollMaintenanceForDisclosure(messageId);
       setInteractionState((current) => {
         const next = new Map(current.reasoningExpansionOverrides);
@@ -2820,10 +2836,19 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             skills: props.skills,
             onUseArtifactTemplate: props.onUseArtifactTemplate,
           })}
+          {props.worktreeSetup && info.index === setupAnchorIndex ? (
+            <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
+          ) : props.setupWorkingStartedAt && info.index === setupAnchorIndex ? (
+            <WorktreeWorkingHeader startedAt={props.setupWorkingStartedAt} />
+          ) : null}
         </ThreadMediaVisibility>
       </Animated.View>
     ),
     [
+      props.worktreeSetup,
+      props.setupWorkingStartedAt,
+      props.threadId,
+      setupAnchorIndex,
       props.dispatchingMessageId,
       props.onEditPendingMessage,
       copiedRowId,
@@ -3001,6 +3026,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             ListHeaderComponent={
               <>
                 {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
+                {setupAnchorIndex < 0 && props.worktreeSetup ? (
+                  <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
+                ) : null}
                 {props.loadEarlier != null ? (
                   <Pressable
                     onPress={props.loadEarlier.onLoadEarlier}
@@ -3021,6 +3049,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           />
         </View>
         {presentedFeed.length === 0 &&
+        !props.worktreeSetup &&
         props.activeWorkStartedAt === null &&
         props.contentPresentation.kind === "ready" ? (
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>
