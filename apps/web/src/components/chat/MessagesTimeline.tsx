@@ -172,7 +172,6 @@ import { useAssistantCitationTarget, type CitationHistoryPage } from "./useAssis
 import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRowsWithState,
-  LIVE_ACTIVITY_ROW_ID,
   deriveUnsettledTurnId,
   type MessagesTimelineRowsProjection,
   liveWorkEntryLabel,
@@ -2637,6 +2636,7 @@ function ActivityGroupTimelineRow({
   const liveWork = trailingWork.findLast(workEntryIsActiveTurnActivity) ?? trailingWork.at(-1);
   const thinking = row.active && liveWork === undefined;
   const iconWork = row.active ? liveWork : work.at(-1);
+  const failed = iconWork !== undefined && workEntryDisplayIndicatesToolFailure(iconWork);
   const label = row.active
     ? liveWork
       ? liveWorkEntryLabel(liveWork, ctx.workspaceRoot, true)
@@ -2670,20 +2670,11 @@ function ActivityGroupTimelineRow({
           if (next.kind === "message") messages.push(next.message);
         }
         details.push(
-          <ReasoningTimelineRow
+          <ReasoningTraceBlock
             key={entry.id}
-            disclosureAnchorKey={row.id}
-            row={{
-              kind: "message",
-              id: row.active && index === row.entries.length - 1 ? LIVE_ACTIVITY_ROW_ID : entry.id,
-              createdAt: entry.createdAt,
-              message: entry.message,
-              reasoningMessages: messages,
-              durationStart: entry.createdAt,
-              showAssistantMeta: false,
-              showAssistantCopyButton: false,
-              assistantCopyStreaming: false,
-            }}
+            messages={messages}
+            live={row.active && index === row.entries.length - 1}
+            showHeader={work.length > 0}
           />,
         );
       }
@@ -2694,6 +2685,7 @@ function ActivityGroupTimelineRow({
       <button
         type="button"
         className="group/live-work flex min-h-6 w-full max-w-full cursor-pointer items-center rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+        aria-label={failed ? `${label}, tool call failed` : undefined}
         aria-expanded={row.expanded}
         onClick={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
       >
@@ -2701,6 +2693,7 @@ function ActivityGroupTimelineRow({
           label={label}
           iconName={iconWork ? workEntryIconName(iconWork) : "brain"}
           toolIcon={iconWork?.toolIcon ?? iconWork?.toolSource?.icon}
+          failed={failed}
           active={row.active}
           shimmer={thinking}
         />
@@ -2723,40 +2716,92 @@ function ThinkingTimelineRow() {
 }
 
 /**
+ * Thinking inside an expanded activity group: the trace is already one click
+ * deep, so the text renders under its "Thought" header without another toggle.
+ * A group whose row already reads "Thought" (no visible tool) skips the header.
+ */
+function ReasoningTraceBlock({
+  messages,
+  live,
+  showHeader,
+}: {
+  messages: ReadonlyArray<ChatMessage>;
+  live: boolean;
+  showHeader: boolean;
+}) {
+  const ctx = use(TimelineRowCtx);
+  const { isWorking, unsettledTurnId } = use(TimelineRowActivityCtx);
+  const first = messages[0]!;
+  const streaming =
+    live &&
+    messages.some((reasoningMessage) => reasoningMessage.streaming) &&
+    isWorking &&
+    first.turnId !== null &&
+    first.turnId === unsettledTurnId;
+  if (
+    messages.every((reasoningMessage) => reasoningMessage.text.trim().length === 0) &&
+    !streaming
+  ) {
+    return null;
+  }
+  const label = streaming ? "Thinking" : "Thought";
+  return (
+    <div className="flex flex-col">
+      {showHeader ? (
+        <div className="flex min-h-6 select-none items-center gap-1.5 px-0.5 py-0.5 text-sm leading-relaxed">
+          <span className="flex size-6 shrink-0 items-center justify-center text-icon-muted">
+            <BrainIcon aria-hidden className="block size-4 shrink-0 stroke-[1.8] opacity-70" />
+          </span>
+          <span
+            ref={streaming ? observeVisibleAnimation : undefined}
+            className="relative min-w-0 flex-1 truncate text-secondary-label"
+          >
+            {label}
+            {streaming ? <ActivityShimmerOverlay>{label}</ActivityShimmerOverlay> : null}
+          </span>
+        </div>
+      ) : null}
+      <div className="ms-7 flex flex-col gap-3 rounded-md bg-muted/40 px-3 py-2 text-secondary-label select-text">
+        {messages.map((reasoningMessage) => (
+          <ChatMarkdown
+            key={reasoningMessage.id}
+            text={reasoningMessage.text}
+            cwd={ctx.markdownCwd}
+            threadRef={ctx.threadRef ?? undefined}
+            isStreaming={streaming && reasoningMessage.streaming}
+            lineBreaks
+            skills={ctx.skills}
+            headingLevelOffset={MESSAGE_HEADING_LEVEL}
+            onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+            onImageExpand={ctx.onImageExpand}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
  * A provider's thinking trace. Disclosure overrides live on the list so they
  * survives row recycling in the virtualizer.
  */
 const ReasoningTimelineRow = memo(function ReasoningTimelineRow({
   row,
-  disclosureAnchorKey = row.id,
 }: {
   row: Extract<TimelineRow, { kind: "message" }>;
-  disclosureAnchorKey?: string;
 }) {
   const ctx = use(TimelineRowCtx);
-  const { isWorking, unsettledTurnId } = use(TimelineRowActivityCtx);
   const { message } = row;
-  const messages = row.reasoningMessages ?? [message];
-  // A block left open by a crashed provider or a restarted server never gets
-  // its completion. Only the live turn may claim to still be thinking, so a
-  // settled turn cannot shimmer "Thinking" at the user forever.
+  const { isWorking, unsettledTurnId } = use(TimelineRowActivityCtx);
   const streaming =
-    (row.reasoningMessages === undefined || row.id === LIVE_ACTIVITY_ROW_ID) &&
-    messages.some((reasoningMessage) => reasoningMessage.streaming) &&
-    isWorking &&
-    message.turnId !== null &&
-    message.turnId === unsettledTurnId;
+    message.streaming && isWorking && message.turnId !== null && message.turnId === unsettledTurnId;
   const expanded = ctx.reasoningExpansionOverrides.get(message.id) ?? ctx.expandReasoningByDefault;
   const { onToggleReasoning } = ctx;
   const toggle = useCallback(() => {
-    onToggleReasoning(message.id, !expanded, disclosureAnchorKey);
-  }, [expanded, message.id, disclosureAnchorKey, onToggleReasoning]);
-  const label = `${streaming ? "Thinking" : "Thought"}${messages.length > 1 ? ` (×${messages.length})` : ""}`;
+    onToggleReasoning(message.id, !expanded, row.id);
+  }, [expanded, message.id, row.id, onToggleReasoning]);
 
-  if (
-    messages.every((reasoningMessage) => reasoningMessage.text.trim().length === 0) &&
-    !streaming
-  ) {
+  if (message.text.trim().length === 0) {
     return null;
   }
 
@@ -2772,12 +2817,8 @@ const ReasoningTimelineRow = memo(function ReasoningTimelineRow({
           <BrainIcon aria-hidden className="block size-4 shrink-0 stroke-[1.8] opacity-70" />
         </span>
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          <span
-            ref={streaming ? observeVisibleAnimation : undefined}
-            className="relative min-w-0 flex-1 truncate text-secondary-label text-sm leading-relaxed"
-          >
-            {label}
-            {streaming ? <ActivityShimmerOverlay>{label}</ActivityShimmerOverlay> : null}
+          <span className="relative min-w-0 flex-1 truncate text-secondary-label text-sm leading-relaxed">
+            {streaming ? "Thinking" : "Thought"}
           </span>
           <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
             <ChevronRightIcon
@@ -2791,20 +2832,17 @@ const ReasoningTimelineRow = memo(function ReasoningTimelineRow({
       </button>
       {expanded ? (
         <div className="mt-1 ms-7 flex flex-col gap-3 rounded-md bg-muted/40 px-3 py-2 text-secondary-label select-text">
-          {messages.map((reasoningMessage) => (
-            <ChatMarkdown
-              key={reasoningMessage.id}
-              text={reasoningMessage.text}
-              cwd={ctx.markdownCwd}
-              threadRef={ctx.threadRef ?? undefined}
-              isStreaming={streaming && reasoningMessage.streaming}
-              lineBreaks
-              skills={ctx.skills}
-              headingLevelOffset={MESSAGE_HEADING_LEVEL}
-              onUseArtifactTemplate={ctx.onUseArtifactTemplate}
-              onImageExpand={ctx.onImageExpand}
-            />
-          ))}
+          <ChatMarkdown
+            text={message.text}
+            isStreaming={streaming}
+            cwd={ctx.markdownCwd}
+            threadRef={ctx.threadRef ?? undefined}
+            lineBreaks
+            skills={ctx.skills}
+            headingLevelOffset={MESSAGE_HEADING_LEVEL}
+            onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+            onImageExpand={ctx.onImageExpand}
+          />
         </div>
       ) : null}
     </div>
