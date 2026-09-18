@@ -1796,11 +1796,22 @@ export function estimateTimelineRowTextLength(
     case "activity-group": {
       if (!row.expanded) return 0;
       let length = 0;
+      const hasWork = row.entries.some((entry) => entry.kind === "work");
+      let reasoningExpanded = false;
+      let inReasoningBlock = false;
       for (const entry of row.entries) {
         if (entry.kind === "work") {
+          inReasoningBlock = false;
           length += workEntryTextLength(entry.entry, options);
         } else {
-          length += entry.message.text.length;
+          if (!inReasoningBlock) {
+            reasoningExpanded =
+              !hasWork ||
+              (options.reasoningExpansionOverrides?.get(entry.message.id) ??
+                (options.reasoningExpandedByDefault || options.workLogExpandedByDefault));
+            inReasoningBlock = true;
+          }
+          if (reasoningExpanded) length += entry.message.text.length;
         }
       }
       return length;

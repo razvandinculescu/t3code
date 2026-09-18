@@ -4281,6 +4281,27 @@ describe("timeline row size buckets", () => {
     expect(resolveTimelineRowItemType({ ...row, expanded: false }, expanded)).toBe(
       "activity-group:s",
     );
+    const mixed: MessagesTimelineRow = {
+      ...row,
+      entries: [
+        { kind: "work", id: "tool", createdAt: message.createdAt, entry: entry({ label: "Read" }) },
+        ...row.entries,
+      ],
+    };
+    expect(resolveTimelineRowItemType(mixed, collapsed)).toBe("activity-group:s");
+    expect(resolveTimelineRowItemType(mixed, expanded)).toBe("activity-group:xl");
+    expect(
+      resolveTimelineRowItemType(mixed, {
+        ...expanded,
+        reasoningExpansionOverrides: new Map([[message.id, false]]),
+      }),
+    ).toBe("activity-group:s");
+    expect(
+      resolveTimelineRowItemType(mixed, {
+        ...collapsed,
+        reasoningExpansionOverrides: new Map([[message.id, true]]),
+      }),
+    ).toBe("activity-group:xl");
   });
 
   it("counts grouped image previews only when the row body is expanded", () => {
