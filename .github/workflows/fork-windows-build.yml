@@ -73,11 +73,22 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent \
             "$RUNNER_TEMP/t3-ios-build/Build/Products/Release-iphoneos/T3CodeFork.app" \
             "$RUNNER_TEMP/T3-Code-Fork-iOS-unsigned.zip"
+      - name: Record source identity
+        env:
+          T3_IOS_BUILD_NUMBER: ${{ inputs.build-number }}
+        run: |
+          python3 - <<'PYINFO'
+          import json, os, pathlib, subprocess
+          result = {"sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(), "buildNumber": os.environ["T3_IOS_BUILD_NUMBER"], "codeSigningAllowed": False}
+          pathlib.Path(os.environ["RUNNER_TEMP"], "build-info.json").write_text(json.dumps(result, indent=2) + "\n")
+          PYINFO
       - name: Upload unsigned app
         uses: actions/upload-artifact@v7
         with:
           name: t3code-ios-unsigned
-          path: ${{ runner.temp }}/T3-Code-Fork-iOS-unsigned.zip
+          path: |
+            ${{ runner.temp }}/T3-Code-Fork-iOS-unsigned.zip
+            ${{ runner.temp }}/build-info.json
           if-no-files-found: error
           retention-days: 7
       - name: Upload build log
