@@ -35,7 +35,7 @@ jobs:
           set -euo pipefail
           app="release/mac-arm64/T3 Code (Alpha).app"
           test -d "$app"
-          vp exec asar extract-file "$app/Contents/Resources/app.asar" package.json
+          scripts/node_modules/.bin/asar extract-file "$app/Contents/Resources/app.asar" package.json
           node -e 'const p=require("./package.json"); if (p.t3codeCommitHash !== "ba633743e611b") throw new Error(JSON.stringify(p)); console.log(p.t3codeCommitHash)'
           codesign -dvv "$app" 2>&1 || true
           shasum -a 256 release/*.dmg release/*.zip
