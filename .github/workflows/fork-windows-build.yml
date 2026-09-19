@@ -1,54 +1,44 @@
-name: Fork macOS Build ba633743e
+name: Verify macOS Build ba633743e
 on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
-  build:
-    name: Build macOS arm64
+  verify:
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
         with:
-          ref: ba633743e611b6848221f7250d62066137852629
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-      - uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: |
-            args:
-              - --filter=@t3tools/desktop...
-              - --filter=t3...
-              - --filter=@t3tools/scripts...
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Build desktop artifact
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: vp run dist:desktop:dmg:arm64
-      - name: Verify source identity and signature state
+          name: t3code-macos-ba633743e
+          run-id: 35430032998
+          github-token: ${{ github.token }}
+          path: release
+      - name: Verify disk image, source identity and signature state
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/t3-macos-mount"
           hdiutil attach release/*.dmg -mountpoint "$RUNNER_TEMP/t3-macos-mount" -nobrowse -readonly
           app="$RUNNER_TEMP/t3-macos-mount/T3 Code (Alpha).app"
           test -d "$app"
-          scripts/node_modules/.bin/asar extract-file "$app/Contents/Resources/app.asar" package.json
-          node -e 'const p=require("./package.json"); if (p.t3codeCommitHash !== "ba633743e611b") throw new Error(JSON.stringify(p)); console.log(p.t3codeCommitHash)'
-          codesign -dvv "$app" 2>&1 || true
-          shasum -a 256 release/*.dmg
+          export T3_VERIFY_APP="$app"
+          python3 - <<'PY'
+          import os,pathlib,struct,json,hashlib,subprocess
+          app=pathlib.Path(os.environ['T3_VERIFY_APP'])
+          with (app/'Contents/Resources/app.asar').open('rb') as f:
+              pre=f.read(16);h=json.loads(f.read(struct.unpack('<I',pre[12:16])[0]));item=h['files']['package.json'];f.seek(8+struct.unpack('<I',pre[4:8])[0]+int(item['offset']));pkg=json.loads(f.read(item['size']))
+          assert pkg['t3codeCommitHash']=='ba633743e611',pkg
+          signature=subprocess.run(['codesign','-dvv',str(app)],capture_output=True,text=True)
+          verification=subprocess.run(['codesign','--verify','--deep','--strict',str(app)],capture_output=True,text=True)
+          arches=subprocess.check_output(['lipo','-archs',str(app/'Contents/MacOS/T3 Code (Alpha)')],text=True).strip()
+          assert arches=='arm64',arches
+          result={'sourceCommit':'ba633743e611b6848221f7250d62066137852629','embeddedCommit':pkg['t3codeCommitHash'],'version':pkg['version'],'architecture':arches,'signatureDescription':signature.stderr,'codesignVerifyExit':verification.returncode,'codesignVerifyOutput':verification.stderr,'stableAppleDevelopmentSigning':False,'sha256':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in pathlib.Path('release').glob('*.dmg')}}
+          pathlib.Path('macos-verification.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))
+          PY
           hdiutil detach "$RUNNER_TEMP/t3-macos-mount"
       - uses: actions/upload-artifact@v7
-        if: always()
         with:
-          name: t3code-macos-ba633743e
-          path: |
-            release/*.dmg
-            release/*.zip
-            release/*.yml
+          name: t3code-macos-ba633743e-verification
+          path: macos-verification.json
           if-no-files-found: error
-          retention-days: 14
