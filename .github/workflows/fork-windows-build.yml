@@ -33,13 +33,17 @@ jobs:
       - name: Verify source identity and signature state
         run: |
           set -euo pipefail
-          app="release/mac-arm64/T3 Code (Alpha).app"
+          mkdir -p "$RUNNER_TEMP/t3-macos-mount"
+          hdiutil attach release/*.dmg -mountpoint "$RUNNER_TEMP/t3-macos-mount" -nobrowse -readonly
+          app="$RUNNER_TEMP/t3-macos-mount/T3 Code (Alpha).app"
           test -d "$app"
           scripts/node_modules/.bin/asar extract-file "$app/Contents/Resources/app.asar" package.json
           node -e 'const p=require("./package.json"); if (p.t3codeCommitHash !== "ba633743e611b") throw new Error(JSON.stringify(p)); console.log(p.t3codeCommitHash)'
           codesign -dvv "$app" 2>&1 || true
-          shasum -a 256 release/*.dmg release/*.zip
+          shasum -a 256 release/*.dmg
+          hdiutil detach "$RUNNER_TEMP/t3-macos-mount"
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: t3code-macos-ba633743e
           path: |
