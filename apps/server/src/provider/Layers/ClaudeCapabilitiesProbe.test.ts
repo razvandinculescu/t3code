@@ -368,6 +368,7 @@ it.layer(NodeServices.layer)("external Claude usage probe", (it) => {
         tempDir,
         undefined,
         undefined,
+        undefined,
         () => Cache.get(probeCache, "probe"),
       );
 

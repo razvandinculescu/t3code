@@ -1,5 +1,9 @@
 # Usage and limits
 
+Open **Usage** from the sidebar or the command palette, or press `mod+u` on web and
+desktop when the terminal is not focused. Customize `usage.open` in
+**Settings → Keybindings**.
+
 ## Understand your usage
 
 **Usage** combines Codex, Claude Code, and Grok Build session history from your connected
@@ -48,8 +52,9 @@ the dialog.
 **Usage → Limits** shows a separate card for each subscription account. Each card groups its
 session, weekly, and model-specific limits, with the remaining percentage and reset time beside
 a full-width bar. Tap a bar for the account's plan, where it is signed in, and its reset details.
-On web, you can hover too. Codex accounts with banked reset credits offer **Use reset** in the
-account details.
+On web, you can hover too. Codex and Claude accounts with banked reset credits offer **Use reset**
+in the account details. Claude resets are not available when the server runs on macOS, where
+Claude keeps its login in the Keychain.
 
 The same account signed in on more than one environment, or reported by a hub as well, counts once.
 Filter with the environment dropdown to see what a single machine has.
@@ -94,4 +99,5 @@ settings section when you no longer need it.
 
 Add **Subscription usage** from your iOS or Android widget gallery to see remaining Codex and
 Claude quotas. Tap it to open **Usage → Limits**. On iOS, use **Edit Widget** to choose Session,
-Weekly, or both for each provider. Reopen T3 to refresh expired readings.
+Weekly, or both for each provider. Reopen T3 to refresh expired readings. The Android widget
+requires Android 12L or later.

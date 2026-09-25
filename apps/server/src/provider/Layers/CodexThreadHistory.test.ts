@@ -92,6 +92,7 @@ describe("Codex paginated history", () => {
                 ephemeral: false,
                 modelProvider: "openai",
                 preview: "",
+                projectId: null,
                 source: "cli",
                 status: { type: "idle" },
               },
