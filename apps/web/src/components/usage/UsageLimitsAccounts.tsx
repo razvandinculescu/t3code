@@ -2,9 +2,12 @@ import {
   collectLimitAccounts,
   type LimitAccount,
   collectLimitPools,
+  cursorUsageWindowDetails,
+  displayLimitWindows,
   formatResetsIn,
 } from "@t3tools/shared/usageLimits";
 import { TicketIcon } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { barColor, PaceIcon } from "./UsageLimits";
 import { AccountAvatar, AccountName, PoolSegment, UsageLimitsPooled } from "./UsageLimitsPooled";
@@ -13,14 +16,17 @@ import { AccountAvatar, AccountName, PoolSegment, UsageLimitsPooled } from "./Us
 export function UsageLimitsAccounts({
   presentations,
   now,
+  cursorPrompt,
 }: {
   readonly presentations: Parameters<typeof collectLimitAccounts>[0];
   readonly now: number;
+  readonly cursorPrompt?: ReactNode;
 }) {
   return (
     <UsageLimitsPooled
       presentations={presentations}
       now={now}
+      cursorPrompt={cursorPrompt}
       renderAccounts={(accounts) => <AccountCards accounts={accounts} now={now} />}
     />
   );
@@ -58,14 +64,18 @@ function AccountCards({
                 ) : null}
               </header>
               <div className="divide-y divide-border/40 px-5">
-                {pool.windows.map((window) => {
+                {displayLimitWindows(pool).map((window) => {
                   const member = window.members[0]!;
                   const reset = window.resets[0];
                   const resetsIn = formatResetsIn(member.window, now);
+                  const details =
+                    pool.driver === "cursor" ? cursorUsageWindowDetails(window.id) : undefined;
                   return (
                     <div key={`${window.kind}:${window.id}`} className="space-y-2.5 py-4">
                       <div className="flex items-baseline justify-between gap-3">
-                        <span className="min-w-0 text-sm text-foreground/85">{window.label}</span>
+                        <span className="min-w-0 text-sm text-foreground/85">
+                          {details?.label ?? window.label}
+                        </span>
                         <span className="flex shrink-0 items-baseline gap-1.5">
                           <span className="text-xl font-semibold tabular-nums text-foreground">
                             {window.remainingPercent}%
@@ -81,6 +91,7 @@ function AccountCards({
                           color={barColor(account.driver)}
                           now={now}
                           index={1}
+                          showAccountName={false}
                           compact
                         />
                       </div>
@@ -90,6 +101,9 @@ function AccountCards({
                         </span>
                         {window.pace ? <PaceIcon pace={window.pace} /> : null}
                       </div>
+                      {details?.description ? (
+                        <p className="text-xs text-muted-foreground">{details.description}</p>
+                      ) : null}
                     </div>
                   );
                 })}
