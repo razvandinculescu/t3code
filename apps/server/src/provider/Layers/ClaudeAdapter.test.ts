@@ -9245,7 +9245,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("interruptTurn closes the session when the turn was steered", () => {
+  it.effect("interruptTurn lets Claude abort a steered turn before closing the session", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -9278,7 +9278,59 @@ describe("ClaudeAdapterLive", () => {
       );
       const completed = turnEvents[1];
       assert.equal(completed?.type === "turn.completed" && completed.payload.state, "interrupted");
-      assert.equal(harness.query.interruptCalls.length, 0);
+      // Claude's aborted result closed the turn before the session was closed.
+      assert.equal(
+        completed?.type === "turn.completed" && completed.payload.errorMessage,
+        undefined,
+      );
+      assert.equal(harness.query.interruptCalls.length, 1);
+      assert.equal(harness.query.closeCalls, 1);
+      assert.equal(yield* adapter.hasSession(session.threadId), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("interruptTurn closes a steered session when Claude never aborts the turn", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      harness.query.interruptEmitsResult = false;
+      const completedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "turn.completed"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "first",
+        attachments: [],
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "and this", attachments: [] });
+
+      const interruptFiber = yield* adapter
+        .interruptTurn(session.threadId, turn.turnId)
+        .pipe(Effect.forkChild);
+      // The grace period runs on the test clock; advance it until the Stop settles.
+      for (let step = 0; step < 10 && interruptFiber.pollUnsafe() === undefined; step += 1) {
+        yield* TestClock.adjust("1 second");
+      }
+      yield* Fiber.join(interruptFiber);
+
+      const completed = Array.from(yield* Fiber.join(completedFiber))[0];
+      assert.equal(completed?.type === "turn.completed" && completed.payload.state, "interrupted");
+      assert.equal(
+        completed?.type === "turn.completed" && completed.payload.errorMessage,
+        "Session stopped.",
+      );
+      assert.equal(harness.query.interruptCalls.length, 1);
       assert.equal(harness.query.closeCalls, 1);
       assert.equal(yield* adapter.hasSession(session.threadId), false);
     }).pipe(

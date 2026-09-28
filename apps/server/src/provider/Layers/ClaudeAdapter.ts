@@ -399,6 +399,8 @@ interface ClaudeTaskAgentState {
  * lifetime; oldest entries evict first.
  */
 const PENDING_TASK_MODEL_CAP = 64;
+/** How long Stop waits for Claude to abort a turn before killing the process. */
+const CLAUDE_INTERRUPT_GRACE = "3 seconds";
 
 /**
  * Buffers a subagent snapshot's authoritative model under its
@@ -5446,6 +5448,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // prompt on its own, leaving a request running with no turn to Stop.
       // Only the hard stop drops that queue.
       if (targetTurn !== undefined && targetTurn.steerCount > 0) {
+        yield* settleInterruptedTurn(context, targetTurn);
         yield* stopSessionInternal(context);
         return;
       }
@@ -5503,6 +5506,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       }
     },
   );
+
+  // Lets Claude abort the running turn through its own path before a hard stop
+  // kills the process, so the prompt reaches the transcript. Killing a first
+  // turn before Claude writes it leaves a resume cursor for a session Claude
+  // never saved, and every later message fails with "No conversation found".
+  const settleInterruptedTurn = Effect.fn("settleInterruptedTurn")(function* (
+    context: ClaudeSessionContext,
+    turnState: ClaudeTurnState,
+  ) {
+    yield* Effect.tryPromise(() => context.query.interrupt()).pipe(
+      Effect.ignore,
+      Effect.andThen(Deferred.await(turnState.completed)),
+      Effect.timeoutOption(CLAUDE_INTERRUPT_GRACE),
+    );
+  });
 
   const readThread: ClaudeAdapterShape["readThread"] = Effect.fn("readThread")(
     function* (threadId) {

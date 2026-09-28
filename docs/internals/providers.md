@@ -119,8 +119,11 @@ stopped, the adapter falls back to closing the session; `thread.session.stop` an
 still close the process.
 
 A turn that was steered (a prompt sent while it ran) is closed with the hard stop instead. The SDK
-writes steers to the CLI's stdin at once, so after `interrupt()` the CLI starts the next queued
-prompt on its own, and that request would have no turn to Stop. When the CLI does start a request
+writes steers to the CLI's stdin at once, so after `interrupt()` alone the CLI starts the next
+queued prompt on its own, and that request would have no turn to Stop. The hard stop still
+interrupts first and waits up to 3 seconds for Claude's aborted result, so the prompt reaches the
+transcript: a first turn killed before Claude saved it leaves a resume cursor that fails with "No
+conversation found". When the CLI does start a request
 with no turn active (a queued prompt after a turn ended by itself), the adapter opens a synthetic
 turn so the UI shows the work and Stop has a target. An API retry storm (`api_retry`) is reported
 once per storm as a work-log warning; the session heartbeat carries every attempt.
