@@ -1,5 +1,7 @@
 import {
+  CHATGPT_USAGE_URL,
   collectLimitAccounts,
+  collectExternalUsageLinks,
   collectLimitNotices,
   collectLimitPools,
   cursorUsageWindowDetails,
@@ -11,9 +13,10 @@ import {
   type LimitPoolWindow,
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
-import { AlertTriangleIcon, TicketIcon } from "lucide-react";
+import { AlertTriangleIcon, ExternalLinkIcon, TicketIcon } from "lucide-react";
 import { Fragment, type ReactNode, useState } from "react";
 
+import { ensureLocalApi } from "../../localApi";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
@@ -21,6 +24,7 @@ import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { getDriverOption } from "../settings/providerDriverMeta";
 import { RedactedSensitiveText } from "../settings/RedactedSensitiveText";
 import { Button } from "../ui/button";
+import { OpenAI } from "../Icons";
 import { Alert, AlertTitle } from "../ui/alert";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import {
@@ -590,6 +594,7 @@ export function UsageLimitsPooled({
   const accounts = collectLimitAccounts(presentations, now);
   const pools = renderAccounts ? [] : collectLimitPools(accounts, now);
   const notices = collectLimitNotices(presentations, now);
+  const externalLinks = collectExternalUsageLinks(presentations);
   const cursorPromptAt =
     Math.max(
       pools.findIndex((pool) => pool.driver === "codex"),
@@ -597,7 +602,10 @@ export function UsageLimitsPooled({
     ) + 1;
   return (
     <div className="flex flex-col gap-8">
-      {accounts.length === 0 && notices.length === 0 && !cursorPrompt ? (
+      {accounts.length === 0 &&
+      notices.length === 0 &&
+      !cursorPrompt &&
+      externalLinks.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No provider on the selected environments reports subscription limits.
         </p>
@@ -618,6 +626,36 @@ export function UsageLimitsPooled({
           {cursorPromptAt === pools.length ? cursorPrompt : null}
         </>
       )}
+      {externalLinks.map((link) => (
+        <section
+          key={link.url}
+          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4"
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            {link.url === CHATGPT_USAGE_URL ? (
+              <OpenAI className="size-5 shrink-0" aria-hidden="true" />
+            ) : null}
+            <div className="min-w-0 space-y-1">
+              <h2 className="text-sm font-medium">{link.label}</h2>
+              {link.url === CHATGPT_USAGE_URL ? (
+                <p className="text-xs text-muted-foreground">
+                  View usage in ChatGPT with your connected account.
+                </p>
+              ) : link.message ? (
+                <p className="max-w-xl text-xs text-muted-foreground">{link.message}</p>
+              ) : null}
+            </div>
+          </div>
+          <Button
+            variant="ghost-muted"
+            size="xs"
+            onClick={() => void ensureLocalApi().shell.openExternal(link.url)}
+          >
+            Manage usage
+            <ExternalLinkIcon className="size-3.5" aria-hidden="true" />
+          </Button>
+        </section>
+      ))}
       <LimitNotices notices={notices} />
     </div>
   );

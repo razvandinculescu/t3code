@@ -1,7 +1,13 @@
-import { EventId, TurnId, type OrchestrationThreadActivity } from "@t3tools/contracts";
+import {
+  ApprovalRequestId,
+  EventId,
+  TurnId,
+  type OrchestrationThreadActivity,
+  type UserInputAttachmentAnswerPayload,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { foldUserInputActivities } from "./userInput.ts";
+import { foldUserInputActivities, getQuestionTextPreview } from "./userInput.ts";
 
 describe("foldUserInputActivities", () => {
   it.each(["pending", "answered"] as const)(
@@ -68,4 +74,38 @@ describe("foldUserInputActivities", () => {
       expect(activities).toEqual(original);
     },
   );
+});
+
+function answer(
+  overrides: Partial<UserInputAttachmentAnswerPayload> = {},
+): UserInputAttachmentAnswerPayload {
+  return {
+    requestId: ApprovalRequestId.make("request-1"),
+    questionTextById: { scope: "Which repository?" },
+    answers: { scope: "Use the private repository" },
+    attachmentsByQuestionId: {},
+    ...overrides,
+  };
+}
+
+describe("getQuestionTextPreview", () => {
+  it("joins the question texts", () => {
+    expect(
+      getQuestionTextPreview(
+        answer({ questionTextById: { scope: "Which repository?", name: "What name?" } }),
+      ),
+    ).toBe("Which repository? · What name?");
+  });
+
+  it("normalizes whitespace and skips blank texts", () => {
+    expect(
+      getQuestionTextPreview(
+        answer({ questionTextById: { scope: "Which\nrepository?", x: "  " } }),
+      ),
+    ).toBe("Which repository?");
+  });
+
+  it("returns an empty string without question texts", () => {
+    expect(getQuestionTextPreview(answer({ questionTextById: undefined }))).toBe("");
+  });
 });
