@@ -254,6 +254,8 @@ patchedDependencies:
   react-native-nitro-modules@0.35.9: patches/react-native-nitro-modules@0.35.9.patch
   react-native-screens@4.28.0: patches/react-native-screens@4.28.0.patch
   uniwind@1.11.0: patches/uniwind@1.11.0.patch
+  expo-modules-core@58.0.9: patches/expo-modules-core@58.0.9.patch
+  expo-notifications@58.0.9: patches/expo-notifications@58.0.9.patch
 
 peerDependencyRules:
   allowAny:
