@@ -1,6 +1,8 @@
 import Foundation
 import UserNotifications
 
+public typealias UNNotificationPresentationOptions = UserNotifications.UNNotificationPresentationOptions
+
 // The registry runs on macOS without starting a simulator. Only the OS-facing
 // types are replaced; the tests compile the dependency's actual Swift source.
 public enum UIBackgroundFetchResult {
