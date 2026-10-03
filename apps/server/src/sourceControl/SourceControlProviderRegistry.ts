@@ -25,7 +25,7 @@ import {
   refineUnknownRemoteProvider,
   type SourceControlProviderDiscoverySpec,
 } from "./SourceControlProviderDiscovery.ts";
-import { ServerConfig } from "../config.ts";
+import * as ServerConfig from "../config.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 
@@ -203,7 +203,7 @@ function bindProviderContext(
 /** @public Service construction is part of the canonical Effect module API. */
 export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWithProviders")(
   function* (registrations: ReadonlyArray<SourceControlProviderRegistration>) {
-    const config = yield* ServerConfig;
+    const config = yield* ServerConfig.ServerConfig;
     const isAvailable = yield* CommandAvailability;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;

@@ -5,7 +5,13 @@ import type { CodexAppServerClient } from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 
-import type { CodexThreadSnapshot } from "./CodexSessionRuntime.ts";
+interface CodexThreadSnapshot {
+  readonly threadId: string;
+  readonly turns: ReadonlyArray<{
+    readonly id: TurnId;
+    readonly items: ReadonlyArray<CodexSchema.V2ThreadReadResponse__ThreadItem>;
+  }>;
+}
 
 // Pagination is experimental and is not in our generated protocol snapshot yet.
 // Request full items so imports and checkpoint rollback retain reasoning and tools.
