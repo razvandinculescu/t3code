@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { embeddedScripts } from "./embeddedScripts";
+import { embeddedScripts } from "./embeddedScripts.js";
 
 /** Each script's language, its text, and the part of the command that spells it. */
 function scriptsOf(command: string) {

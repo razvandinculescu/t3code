@@ -63,24 +63,27 @@ export function createMarkdownCodeHighlightAtomFamily(options?: {
 
 export const markdownCodeHighlightAtom = createMarkdownCodeHighlightAtomFamily();
 
-export function useMarkdownCodeHighlight(input: {
-  readonly code: string;
-  readonly enabled: boolean;
-  readonly language: string | null | undefined;
-  readonly theme: ReviewDiffTheme;
-}): MarkdownHighlightedCode | null {
+export function useMarkdownCodeHighlight(
+  input: {
+    readonly code: string;
+    readonly enabled: boolean;
+    readonly language: string | null | undefined;
+    readonly theme: ReviewDiffTheme;
+  },
+  family = markdownCodeHighlightAtom,
+): MarkdownHighlightedCode | null {
   const normalizedLanguage = input.language?.trim() || "text";
   const enabled = input.enabled && Boolean(input.language?.trim());
   const atomLanguage = enabled ? normalizedLanguage : "text";
   const highlightAtom = useMemo(
     () =>
-      markdownCodeHighlightAtom({
+      family({
         code: enabled ? input.code : "",
         enabled,
         language: atomLanguage,
         theme: input.theme,
       }),
-    [atomLanguage, enabled, input.code, input.theme],
+    [atomLanguage, enabled, family, input.code, input.theme],
   );
   const result = useAtomValue(highlightAtom);
   return AsyncResult.isSuccess(result) ? result.value : null;

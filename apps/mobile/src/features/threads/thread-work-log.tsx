@@ -1,5 +1,6 @@
 import { SubagentStatusDot } from "./SubagentStatusDot";
 import { ThreadSubagentGroup } from "./thread-subagent-group";
+import { ThreadShellCommandBlock } from "./ThreadShellCommandBlock";
 import {
   WorkLogLabel,
   WorkLogBlock,
@@ -1158,21 +1159,20 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
             {reasoning ? (
               props.renderReasoning(reasoning.text)
             ) : call ? (
-              [
-                call.command,
-                ...(call.args ?? []).map(([key, value]) => `${key} ${value}`),
-                call.argsText,
-              ]
-                .filter((line): line is string => Boolean(line))
-                .map((line, index) => (
-                  <Text
-                    key={`${index}:${line}`}
-                    selectable
-                    className="font-mono text-2xs leading-normal text-foreground"
-                  >
-                    {line}
-                  </Text>
-                ))
+              <>
+                {call.command ? <ThreadShellCommandBlock command={call.command} /> : null}
+                {[...(call.args ?? []).map(([key, value]) => `${key} ${value}`), call.argsText]
+                  .filter((line): line is string => Boolean(line))
+                  .map((line, index) => (
+                    <Text
+                      key={`${index}:${line}`}
+                      selectable
+                      className="font-mono text-2xs leading-normal text-foreground"
+                    >
+                      {line}
+                    </Text>
+                  ))}
+              </>
             ) : fullDetail ? (
               <Text selectable className="font-mono text-2xs leading-normal text-foreground-muted">
                 {fullDetail}

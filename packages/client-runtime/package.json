@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./work-log/command-tokens": {
+      "types": "./src/work-log/commandTokens.ts",
+      "default": "./src/work-log/commandTokens.ts"
+    },
+    "./work-log/embedded-scripts": {
+      "types": "./src/work-log/embeddedScripts.ts",
+      "default": "./src/work-log/embeddedScripts.ts"
+    },
     "./composerThreadItems": {
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"
@@ -377,6 +385,7 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@pierre/diffs": "catalog:",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "effect": "catalog:",
@@ -385,6 +394,7 @@
     "micromark-util-character": "^2.1.1",
     "remark-parse": "^11.0.0",
     "three": "0.180.0",
+    "unbash": "^5.0.0",
     "unified": "^11.0.5"
   },
   "devDependencies": {
