@@ -128,7 +128,7 @@
     "shiki": "4.2.0",
     "tailwind-merge": "^3.5.0",
     "unicode-segmenter": "0.17.3",
-    "uniwind": "1.11.0"
+    "uniwind": "1.12.1"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
