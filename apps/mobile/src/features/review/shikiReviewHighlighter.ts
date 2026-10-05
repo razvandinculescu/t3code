@@ -9,6 +9,8 @@ import typescriptLanguage from "@shikijs/langs/typescript";
 import yamlLanguage from "@shikijs/langs/yaml";
 import githubDarkDefault from "@shikijs/themes/github-dark-default";
 import githubLightDefault from "@shikijs/themes/github-light-default";
+import pierreDark from "@pierre/theme/pierre-dark";
+import pierreLight from "@pierre/theme/pierre-light";
 import { getFiletypeFromFileName } from "@pierre/diffs/utils/getFiletypeFromFileName";
 import * as Schema from "effect/Schema";
 
@@ -43,6 +45,16 @@ const SHIKI_THEME_NAME_BY_SCHEME = {
   light: "github-light-default",
   dark: "github-dark-default",
 } as const;
+const COMMAND_THEME_NAME_BY_SCHEME = {
+  light: "pierre-light",
+  dark: "pierre-dark",
+} as const;
+
+function snippetTheme(input: { readonly theme: ReviewDiffTheme; readonly palette?: "pierre" }) {
+  return (input.palette === "pierre" ? COMMAND_THEME_NAME_BY_SCHEME : SHIKI_THEME_NAME_BY_SCHEME)[
+    input.theme
+  ];
+}
 const REVIEW_HIGHLIGHTER_ENGINE_ENV_VALUE =
   process.env.EXPO_PUBLIC_REVIEW_HIGHLIGHTER_ENGINE ??
   (process.env.NODE_ENV === "test" ? "javascript" : "native");
@@ -230,7 +242,22 @@ async function getHighlighter(): Promise<HighlighterCore> {
         preference: REVIEW_HIGHLIGHTER_ENGINE_PREFERENCE,
       });
 
-      const themes = [githubLightDefault, githubDarkDefault];
+      const themes = [
+        githubLightDefault,
+        githubDarkDefault,
+        {
+          name: pierreLight.name,
+          type: pierreLight.type,
+          colors: pierreLight.colors,
+          tokenColors: [...pierreLight.tokenColors],
+        },
+        {
+          name: pierreDark.name,
+          type: pierreDark.type,
+          colors: pierreDark.colors,
+          tokenColors: [...pierreDark.tokenColors],
+        },
+      ];
 
       if (REVIEW_HIGHLIGHTER_ENGINE_PREFERENCE !== "javascript") {
         try {
@@ -566,10 +593,11 @@ export async function highlightCodeSnippet(input: {
   readonly code: string;
   readonly language?: string | null;
   readonly theme: ReviewDiffTheme;
+  readonly palette?: "pierre";
 }): Promise<ReadonlyArray<ReadonlyArray<ReviewHighlightedToken>>> {
   const languageHint = input.language?.trim() || "text";
   const language = await resolveLanguageFromPath(`snippet.${languageHint}`, languageHint);
-  const theme = SHIKI_THEME_NAME_BY_SCHEME[input.theme];
+  const theme = snippetTheme(input);
   // Bound retained text and preserve the existing plain-text/long-line fallback.
   if (
     !input.session ||
@@ -604,7 +632,7 @@ highlightCodeSnippet.read = (input: Parameters<typeof highlightCodeSnippet>[0]) 
   if (
     !session ||
     session.language !== language ||
-    session.theme !== SHIKI_THEME_NAME_BY_SCHEME[input.theme] ||
+    session.theme !== snippetTheme(input) ||
     input.code.split("\n").some((line) => line.length > REVIEW_TOKENIZE_MAX_LINE_LENGTH)
   )
     return undefined;

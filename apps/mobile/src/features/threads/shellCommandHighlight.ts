@@ -33,7 +33,10 @@ export async function highlightShellCommand(input: {
   readonly theme: ReviewDiffTheme;
 }): Promise<ReadonlyArray<ReadonlyArray<ReviewHighlightedToken>>> {
   const language = commandHighlightLanguage(input.code);
-  const outer = withOffsets(input.code, await highlightCodeSnippet({ ...input, language }));
+  const outer = withOffsets(
+    input.code,
+    await highlightCodeSnippet({ ...input, language, palette: "pierre" }),
+  );
   if (language !== "shellscript" || input.code.length > 100_000) return normalize(outer);
   const { embeddedScripts } = await import("@t3tools/client-runtime/work-log/embedded-scripts");
   const scripts = embeddedScripts(input.code);
@@ -55,6 +58,7 @@ export async function highlightShellCommand(input: {
             code: script.text,
             language: script.language,
             theme: input.theme,
+            palette: "pierre",
           }),
         ),
       );
