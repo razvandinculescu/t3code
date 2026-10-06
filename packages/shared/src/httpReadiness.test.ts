@@ -6,7 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientError, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import { waitForHttpReady } from "./httpReadiness.ts";
 
 class ReadinessError extends Data.TaggedError("ReadinessError")<{ readonly cause: unknown }> {}

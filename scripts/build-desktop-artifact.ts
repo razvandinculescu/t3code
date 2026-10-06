@@ -50,8 +50,8 @@ import type { PlatformError } from "effect/PlatformError";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { Command, Flag } from "effect/unstable/cli";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Command, Flag } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = "com.t3tools.t3code";
@@ -2786,6 +2786,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   }
 
   if (platform === "linux") {
+    // electron-builder 26 defaults to its legacy AppImage runtime, which
+    // dynamically loads the system libfuse2 library. Pin the static runtime so
+    // the AppImage also launches on distributions that only provide FUSE 3.
+    buildConfig.toolsets = { appimage: "1.0.3" };
     buildConfig.linux = {
       // The .deb is built from the same unpacked app after the AppImage.
       // electron-builder lists both in latest-linux.yml and writes

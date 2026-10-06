@@ -14,7 +14,7 @@ import {
   hasQuestionAnswer,
 } from "@t3tools/client-runtime/work-log/user-input";
 import * as Haptics from "expo-haptics";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { Image } from "expo-image";
 import { type AppSymbolName, SymbolView } from "../../components/AppSymbol";
@@ -67,7 +67,11 @@ import {
   type ThreadFeedActivity,
   workEntryRowLabel,
 } from "../../lib/threadActivity";
-import { toolCallLines, turnItemOutputText } from "@t3tools/client-runtime/work-log/item-detail";
+import {
+  toolCallLines,
+  turnItemOutputImages,
+  turnItemOutputText,
+} from "@t3tools/client-runtime/work-log/item-detail";
 import { useTurnItemDetail } from "../../state/queries";
 import {
   resolveThreadWorkGroupInitialScroll,
@@ -83,6 +87,8 @@ import {
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
 import { notificationChildThreadId } from "@t3tools/client-runtime/state/thread-execution";
 import type { MarkdownImageRenderer } from "../../native/SelectableMarkdownText";
+import type { FilePreviewSource } from "../../components/FilePreviewModal";
+import { ThreadMarkdownImage } from "./ThreadMarkdownImage";
 import Animated, {
   cancelAnimation,
   Easing,
@@ -465,6 +471,7 @@ interface ThreadWorkLogProps {
   readonly onToggleRow: (rowId: string, anchorKey: string, expanded?: boolean) => void;
   readonly renderImage: MarkdownImageRenderer;
   readonly renderReasoning: (text: string) => ReactNode;
+  readonly onPressPreview: (source: FilePreviewSource) => void;
 }
 
 export function ThreadWorkLog(props: ThreadWorkLogProps) {
@@ -491,6 +498,7 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
         onToggleRow={props.onToggleRow}
         renderImage={props.renderImage}
         renderReasoning={props.renderReasoning}
+        onPressPreview={props.onPressPreview}
         themeAppearance={props.themeAppearance}
       />
     ),
@@ -506,6 +514,7 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
       props.onToggleRow,
       props.renderImage,
       props.renderReasoning,
+      props.onPressPreview,
       props.themeAppearance,
     ],
   );
@@ -970,12 +979,13 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
         ? formatItemFullDetail(row.projectedItem, fetchedItem)
         : row.getFullDetail()
       : null;
+  const outputImages = expanded && fetchedItem ? turnItemOutputImages(fetchedItem) : [];
   const fetchedOutput = !expanded
     ? null
     : shownItem.type === "file_search" || shownItem.type === "web_search"
       ? turnItemOutputText(shownItem)
       : fetchedItem
-        ? (turnItemOutputText(fetchedItem) ?? "No output.")
+        ? (turnItemOutputText(fetchedItem) ?? (outputImages.length > 0 ? null : "No output."))
         : fetchedDetail.error
           ? `Couldn't load output: ${fetchedDetail.error}`
           : row.fetchesDetail
@@ -1135,6 +1145,7 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
         call ||
         fetchedOutput ||
         viewedImagePath ||
+        outputImages.length > 0 ||
         row.workEntry.questionAnswer) ? (
         <Animated.View
           entering={WORK_LOG_DETAIL_ENTER_TRANSITION}
@@ -1153,6 +1164,16 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
               {props.renderImage({ href: viewedImagePath, alt: null, title: null })}
             </View>
           ) : null}
+          {outputImages.map((resource) => (
+            <View key={resource.index} className="pb-1.5">
+              <ThreadMarkdownImage
+                environmentId={props.environmentId}
+                resource={resource}
+                alt={null}
+                onPressPreview={props.onPressPreview}
+              />
+            </View>
+          ))}
           <ScrollView
             nestedScrollEnabled
             directionalLockEnabled
