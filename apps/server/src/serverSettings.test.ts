@@ -578,7 +578,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         const change = Option.getOrUndefined(yield* Stream.runHead(changes));
         const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
         // Inspect raw persisted JSON before schema decoding can apply defaults.
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         const persisted = JSON.parse(raw) as Record<string, unknown>;
 
         assert.strictEqual(next.sidebarAutoSettleAfterDays, null);
@@ -687,6 +686,91 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  // Only driver-keyed instances are fallback candidates; a custom instance id
+  // is not one, so the selection stays put until the user changes it.
+  it.effect.each(["codex"])(
+    "falls back to enabled instance %s after disabling the selection",
+    (fallbackId) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+          const serverConfig = yield* ServerConfig.ServerConfig;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const writerId = ProviderInstanceId.make("writer");
+          const fallbackInstanceId = ProviderInstanceId.make(fallbackId);
+          const selection = { instanceId: writerId, model: "claude-sonnet-4-6" };
+          const providerInstances = {
+            [fallbackInstanceId]: {
+              driver: ProviderDriverKind.make("codex"),
+              enabled: true,
+              config: {},
+            },
+            [writerId]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              enabled: true,
+              config: {},
+            },
+          };
+
+          yield* serverSettings.updateSettings({
+            providers: Object.fromEntries(
+              Object.keys(DEFAULT_SERVER_SETTINGS.providers).map(
+                (provider) => [provider, { enabled: false }] as const,
+              ),
+            ),
+            providerInstances,
+            textGenerationModelSelection: selection,
+          });
+          const changes = yield* serverSettings.subscribeChanges;
+
+          const next = yield* serverSettings.updateSettings({
+            providerInstances: {
+              ...providerInstances,
+              [writerId]: { ...providerInstances[writerId]!, enabled: false },
+            },
+          });
+          const fallbackSelection = {
+            instanceId: fallbackInstanceId,
+            model: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model,
+          };
+          assert.deepEqual(next.textGenerationModelSelection, fallbackSelection);
+          assert.deepEqual(
+            (yield* serverSettings.getSettings).textGenerationModelSelection,
+            fallbackSelection,
+          );
+          const change = Option.getOrUndefined(yield* Stream.runHead(changes));
+          assert.deepEqual(change?.textGenerationModelSelection, fallbackSelection);
+
+          const persisted = yield* fileSystem
+            .readFileString(serverConfig.settingsPath)
+            .pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings))),
+            );
+          assert.deepEqual(persisted.textGenerationModelSelection, selection);
+
+          const restored = yield* serverSettings.updateSettings({ providerInstances });
+          assert.deepEqual(restored.textGenerationModelSelection, selection);
+        }),
+      ).pipe(Effect.provide(layerServerSettings())),
+  );
+
+  it.effect("skips explicitly disabled instances when choosing a legacy fallback", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const next = yield* serverSettings.updateSettings({
+        providerInstances: {
+          [ProviderInstanceId.make("codex")]: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: false,
+            config: {},
+          },
+        },
+      });
+
+      assert.equal(next.textGenerationModelSelection.instanceId, "claudeAgent");
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("preserves enabled text generation selections for non-built-in drivers", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
@@ -759,7 +843,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
         const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
         assert.deepEqual(
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
           JSON.parse(raw).sourceControlWriterModelSelection,
           sourceControlWriterModelSelection,
         );
@@ -1046,7 +1129,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.isFalse(settings.providers.grok.enabled);
 
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       assert.isFalse(JSON.parse(raw).providers.grok.enabled);
     }).pipe(Effect.provide(layerServerSettings())),
   );
@@ -1067,7 +1149,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       yield* serverSettings.updateSettings({ addProjectBaseDirectory: "~/Development" });
 
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       const persisted = JSON.parse(raw);
       assert.isTrue(persisted.providers.cursor.enabled);
       assert.isTrue(persisted.providers.grok.enabled);
@@ -1104,7 +1185,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.isFalse(resolveProviderInstanceEnabled(grok));
 
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       const persisted = JSON.parse(raw);
       assert.isFalse(persisted.providers.cursor.enabled);
       assert.isFalse(persisted.providers.grok.enabled);
@@ -1288,7 +1368,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.equal(next.providers.codex.binaryPath, "/opt/homebrew/bin/codex");
 
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       assert.deepEqual(JSON.parse(raw), {
         addProjectBaseDirectory: "~/Development",
         observability: {
@@ -1506,7 +1585,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       assert.notInclude(raw, "sk-or-secret");
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       assert.deepEqual(JSON.parse(raw).providerInstances.codex_personal.environment, [
         {
           name: "OPENROUTER_API_KEY",
@@ -1992,10 +2070,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         projectSettingsOverrides: { [legacyProject]: null },
       });
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      const persisted = yield* decodeServerSettings(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
-        JSON.parse(raw),
-      );
+      const persisted = yield* decodeServerSettings(JSON.parse(raw));
       assert.isTrue(persisted.projectSettingsFolded);
       assert.isUndefined(persisted.projectSettingsOverrides[legacyProject]);
     }).pipe(Effect.provide(layerServerSettings())),
