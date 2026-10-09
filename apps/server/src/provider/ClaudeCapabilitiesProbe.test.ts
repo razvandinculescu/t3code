@@ -29,7 +29,7 @@ import {
   probeExternalClaudeUsageLimits,
   probeClaudeWorkspaceSnapshot,
 } from "./ClaudeProvider.ts";
-import { COMPACT_SLASH_COMMAND } from "./providerSnapshot.ts";
+import { COMPACT_SLASH_COMMAND } from "@t3tools/provider-core/server/snapshotProbe";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
@@ -346,6 +346,7 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
         email: "dev@example.com",
         subscriptionType: "pro",
         tokenSource: "oauth",
+        apiKeySource: undefined,
         apiProvider: undefined,
         slashCommands: [
           {
@@ -416,6 +417,7 @@ it.layer(NodeServices.layer)("external Claude usage probe", (it) => {
         email: undefined,
         subscriptionType: undefined,
         tokenSource: "apiKey",
+        apiKeySource: undefined,
         apiProvider: undefined,
         slashCommands: [],
         usage: { rate_limits_available: false, rate_limits: null },
@@ -478,6 +480,7 @@ it.layer(NodeServices.layer)("external Claude usage probe", (it) => {
         email: undefined,
         subscriptionType: undefined,
         tokenSource: "apiKey",
+        apiKeySource: undefined,
         apiProvider: undefined,
         slashCommands: [],
         usage: { rate_limits_available: false, rate_limits: null },

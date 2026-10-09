@@ -7,7 +7,10 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
-import { makeUnavailableUsageLimits, makeUsageLimits } from "./providerUsageLimits.ts";
+import {
+  makeUnavailableUsageLimits,
+  makeUsageLimits,
+} from "@t3tools/provider-core/server/usageLimits";
 
 const Bucket = Schema.Struct({
   bucketId: Schema.String,

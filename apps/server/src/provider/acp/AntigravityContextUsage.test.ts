@@ -8,7 +8,7 @@ import {
   decodeAntigravityContextUsage,
   readAntigravityContextUsage,
 } from "./AntigravityContextUsage.ts";
-import { parseSessionUpdateEvent } from "./AcpRuntimeModel.ts";
+import { parseSessionUpdateEvent } from "@t3tools/provider-acp/server/runtimeModel";
 
 const varint = (value: number): number[] => {
   const bytes = [];
