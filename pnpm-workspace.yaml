@@ -21,6 +21,8 @@ allowBuilds:
   # Ships N-API prebuilds; its install script only rebuilds from source.
   objc-js: false
   sharp: true
+  # Its install script only swaps the Node launcher for a sh one (~22 ms per run).
+  tsc-rs: false
   utf-8-validate: false
   workerd: false
 
@@ -59,6 +61,7 @@ catalog:
   plist: 3.1.1
   tailwindcss: 4.3.3
   tldts: 7.4.2
+  tsc-rs: 0.2.0
   typescript: 7.0.2
   undici: 8.11.2
   vite: npm:@voidzero-dev/vite-plus-core@1.0.0
@@ -186,6 +189,10 @@ minimumReleaseAgeExclude:
   - "@opencode/client@2.0.23"
   - "@opencode/protocol@2.0.23"
   - "@opencode/schema@2.0.23"
+  - "@tsc-rs/darwin-arm64@0.2.0"
+  - "@tsc-rs/linux-arm64@0.2.0"
+  - "@tsc-rs/linux-x64@0.2.0"
+  - tsc-rs@0.2.0
 
 overrides:
   # Keep jsdom's optional peer consistent so Vite+ has one test-runner instance.
