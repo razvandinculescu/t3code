@@ -385,7 +385,7 @@ describe("tailscale", () => {
     () => {
       const commands: ReadonlyArray<string>[] = [];
       let attempts = 0;
-      const layer = mockSpawnerLayer((_command, args) => {
+      const layer = layerMockSpawner((_command, args) => {
         commands.push(args);
         if (args.includes("--bg") && ++attempts <= 2) {
           return { code: 1, stderr: "tailscaled is not running" };
@@ -430,7 +430,7 @@ describe("tailscale", () => {
     "bounds retry delays and cancels recovery without deleting an unconfigured mapping",
     () => {
       const commands: ReadonlyArray<string>[] = [];
-      const layer = mockSpawnerLayer((_command, args) => {
+      const layer = layerMockSpawner((_command, args) => {
         commands.push(args);
         return { code: 1, stderr: "tailscaled is not running" };
       });
@@ -459,7 +459,7 @@ describe("tailscale", () => {
 
   it.effect("retries a timed-out configure command without blocking cancellation", () => {
     let attempts = 0;
-    const layer = spawnerLayer(
+    const layer = layerSpawner(
       ChildProcessSpawner.make(() => {
         attempts++;
         return Effect.succeed(neverFinishingMockHandle());
