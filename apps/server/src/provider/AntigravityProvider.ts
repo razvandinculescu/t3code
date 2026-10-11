@@ -23,7 +23,6 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
-import { resolveUsageLimitsAfterProbe } from "@t3tools/provider-core/server/usageLimits";
 import {
   makeManualOnlyProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilities,
@@ -33,6 +32,7 @@ import {
   isCommandMissingCause,
   type ServerProviderDraft,
 } from "@t3tools/provider-core/server/snapshotProbe";
+import { resolveUsageLimitsAfterProbe } from "@t3tools/provider-core/server/usageLimits";
 
 const EMPTY_MODEL_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
 const MAX_WORKSPACE_SNAPSHOTS = 32;
@@ -127,13 +127,17 @@ interface AntigravityProviderOptions {
     EffectAcpErrors.AcpError | ProviderSetupError
   >;
   readonly supportsTextGeneration: Effect.Effect<boolean>;
-  readonly usageProbe?: Effect.Effect<ServerProviderUsageLimits | undefined>;
+  readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits | undefined>;
+  readonly clearUsage?: Effect.Effect<void>;
   readonly maintenanceCapabilities?: ProviderMaintenanceCapabilities;
   /** Auth type and label published once a session authenticates. */
   readonly auth?: { readonly type: string; readonly label: string };
 }
 
-/** Health uses initialize only. Session callbacks supply account-specific metadata. */
+/**
+ * Health uses initialize only. Session callbacks supply account-specific
+ * metadata, which a disabled instance never shows.
+ */
 export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(function* (
   settings: AntigravitySettings,
   options: AntigravityProviderOptions,
@@ -177,12 +181,12 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   );
 
   const refreshUsage = Effect.gen(function* () {
-    if (!settings.enabled || !options.usageProbe) return;
+    if (!settings.enabled || !options.probeUsage) return;
     const before = yield* SubscriptionRef.get(metadata);
     // At boot the local ACP health check leaves auth unknown; the scoped
     // credential probe can still read the saved account without starting a turn.
     if (before.draft.auth.status === "unauthenticated") return;
-    const probed = yield* options.usageProbe;
+    const probed = yield* options.probeUsage;
     yield* SubscriptionRef.update(metadata, (state) => {
       if (state.authRevision !== before.authRevision) return state;
       const { usageLimits: previous, ...draft } = state.draft;
@@ -237,6 +241,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           version: initialized?.agentInfo?.version || draft.version,
           status: errorMessage ? "error" : authenticated ? "ready" : "warning",
           checkedAt: updatedAt,
+          usageLimits: missingInstallation ? undefined : draft.usageLimits,
           ...(missingInstallation
             ? {
                 models: [],
@@ -256,7 +261,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
         },
       } satisfies AntigravityProviderState;
     });
-    yield* refreshUsage;
+    if (!missingInstallation) yield* refreshUsage;
     return yield* getSnapshot;
   });
 
@@ -285,6 +290,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
     cwd?: string,
   ) {
+    if (!settings.enabled) return;
     const before = yield* SubscriptionRef.get(metadata);
     const supportsTextGeneration = yield* options.supportsTextGeneration;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
@@ -303,7 +309,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
         draft: {
           ...draft,
           installed: true,
-          status: settings.enabled ? "ready" : "disabled",
+          status: "ready",
           version: started.initializeResult.agentInfo?.version || draft.version,
           auth: {
             status: "authenticated",
@@ -346,6 +352,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
     cwd?: string,
   ) {
+    if (!settings.enabled) return;
     const slashCommands = nativeCommands(commands);
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     yield* SubscriptionRef.update(metadata, (state) => {
@@ -377,6 +384,8 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   });
 
   const clearAccountMetadata = Effect.fn("AntigravityProvider.clearAccountMetadata")(function* () {
+    if (options.clearUsage) yield* options.clearUsage;
+    if (!settings.enabled) return;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     yield* SubscriptionRef.update(metadata, (state) => {
       const { usageLimits: _usageLimits, ...draft } = state.draft;

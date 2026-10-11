@@ -99,6 +99,7 @@ export const AntigravityDriver: ProviderDriver<
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const fileSystem = yield* FileSystem.FileSystem;
+      const httpClient = yield* HttpClient.HttpClient;
       const path = yield* Path.Path;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const host = yield* ProviderHost.ProviderHost;
@@ -388,14 +389,20 @@ export const AntigravityDriver: ProviderDriver<
         };
       });
 
-      const usageProbe =
-        auth.authMethod === "oauth-personal"
-          ? yield* makeAntigravityUsageProbe(profileDirectory)
-          : undefined;
+      const usage = yield* makeAntigravityUsageProbe({
+        profileDirectory,
+        authMethod: auth.authMethod,
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+      );
       const provider = yield* makeAntigravityProvider(settings, {
-        ...(usageProbe ? { usageProbe } : {}),
         stampIdentity: classifyModels,
         probe,
+        probeUsage: usage.probe,
+        clearUsage: usage.clear,
         auth: { type: auth.authMethod, label: antigravityAuthLabel(auth.authMethod) },
         supportsTextGeneration: isAntigravityTextGenerationAvailable(profileDirectory).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),

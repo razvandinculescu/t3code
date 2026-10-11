@@ -132,7 +132,7 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
   options: {
     readonly enabled?: boolean;
     readonly safe?: boolean;
-    readonly usageProbe?: Effect.Effect<ServerProviderUsageLimits | undefined>;
+    readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits | undefined>;
   } = {},
 ) {
   const initialProbe = yield* Deferred.make<EffectAcpSchema.InitializeResponse, ProbeError>();
@@ -145,8 +145,8 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
   const provider = yield* makeAntigravityProvider(
     decodeSettings({ enabled: options.enabled ?? true, customModels: ["do-not-seed-me"] }),
     {
-      ...(options.usageProbe ? { usageProbe: options.usageProbe } : {}),
       stampIdentity: (snapshot) => Effect.succeed({ ...snapshot, instanceId, driver }),
+      ...(options.probeUsage ? { probeUsage: options.probeUsage } : {}),
       probe: Ref.update(probeCalls, (count) => count + 1).pipe(
         Effect.andThen(Ref.get(probe)),
         Effect.flatten,
@@ -257,31 +257,23 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
     ),
   );
 
-  it.effect("records explicit sign-in while disabled without starting a health probe", () =>
+  it.effect("ignores account updates while disabled", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeHarness({ enabled: false });
-        const signedIn = yield* Stream.toPull(
-          harness.provider.snapshot.streamChanges.pipe(
-            Stream.filter(
-              (snapshot) =>
-                snapshot.auth.status === "authenticated" && snapshot.slashCommands.length > 0,
-            ),
-          ),
-        );
         yield* harness.provider.onSessionStarted(started);
         yield* harness.provider.onAvailableCommands(commands);
-        const [snapshot] = yield* signedIn;
+        yield* harness.provider.onSignedOut;
+        const snapshot = yield* harness.provider.snapshot.refresh;
         expect(snapshot).toMatchObject({
           enabled: false,
-          installed: true,
+          installed: false,
           status: "disabled",
-          auth: { status: "authenticated", type: "oauth-personal" },
+          auth: { status: "unknown" },
+          models: [],
+          slashCommands: [],
           workspaceSnapshots: [],
         });
-        expect(snapshot.models).toEqual(buildAntigravityModelsFromSession(sessionSetupResult));
-        expect(snapshot.slashCommands).toEqual(expectedCommands);
-        expect((yield* harness.provider.snapshot.refresh).models).toEqual(snapshot.models);
         expect(yield* Ref.get(harness.probeCalls)).toBe(0);
       }),
     ),
@@ -676,6 +668,75 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       }),
     ),
   );
+
+  it.effect(
+    "publishes limits, retains a successful read on failure, and clears them on sign-out",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const limits: ServerProviderUsageLimits = {
+            checkedAt: "2026-10-09T12:00:00.000Z",
+            windows: [
+              {
+                id: "3p-weekly",
+                kind: "weekly",
+                label: "Claude & GPT (shared) · Weekly",
+                usedPercent: 75,
+              },
+            ],
+          };
+          const usage = yield* Ref.make(limits);
+          const harness = yield* makeHarness({ probeUsage: Ref.get(usage) });
+          yield* harness.initialize;
+          expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toEqual(limits);
+          yield* Ref.set(harness.probe, Effect.succeed(initializeResult));
+          yield* Ref.set(usage, {
+            checkedAt: "2026-10-09T12:01:00.000Z",
+            windows: [],
+            unavailable: { reason: "probeFailed" },
+          });
+          expect((yield* harness.provider.snapshot.refresh).usageLimits).toEqual(limits);
+          yield* harness.provider.onSignedOut;
+          expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
+          yield* Ref.set(usage, {
+            checkedAt: "2026-10-09T12:02:00.000Z",
+            windows: [],
+            unavailable: { reason: "unsupported" },
+          });
+          expect((yield* harness.provider.snapshot.refresh).usageLimits).toBeUndefined();
+        }),
+      ),
+  );
+
+  it.effect("a quota read finishing after sign-out cannot restore account limits", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const readStarted = yield* Deferred.make<void>();
+        const readResult = yield* Deferred.make<ServerProviderUsageLimits>();
+        const usage = yield* Ref.make<Effect.Effect<ServerProviderUsageLimits>>(
+          Effect.succeed({ checkedAt: "2026-10-09T12:00:00.000Z", windows: [] }),
+        );
+        const harness = yield* makeHarness({ probeUsage: Ref.get(usage).pipe(Effect.flatten) });
+        yield* harness.initialize;
+        yield* Ref.set(harness.probe, Effect.succeed(initializeResult));
+        yield* Ref.set(
+          usage,
+          Deferred.succeed(readStarted, undefined).pipe(Effect.andThen(Deferred.await(readResult))),
+        );
+        const refresh = yield* harness.provider.snapshot.refresh.pipe(Effect.forkChild);
+        yield* Deferred.await(readStarted);
+        yield* harness.provider.onSignedOut;
+        yield* Deferred.succeed(readResult, {
+          checkedAt: "2026-10-09T12:01:00.000Z",
+          windows: [
+            { id: "gemini-5h", kind: "session", label: "Gemini · 5-hour", usedPercent: 10 },
+          ],
+        });
+        yield* Fiber.join(refresh);
+        expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
+      }),
+    ),
+  );
 });
 
 const quotaSnapshot: ServerProviderUsageLimits = {
@@ -688,7 +749,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const quota = yield* Ref.make<ServerProviderUsageLimits>(quotaSnapshot);
-      const h = yield* makeHarness({ usageProbe: Ref.get(quota) });
+      const h = yield* makeHarness({ probeUsage: Ref.get(quota) });
       yield* h.initialize;
       expect((yield* h.provider.snapshot.refresh).usageLimits).toEqual(quotaSnapshot);
       yield* Ref.set(h.probe, Effect.succeed(initializeResult));
@@ -714,7 +775,7 @@ it.effect(
       const currentProbe = yield* Ref.make<Effect.Effect<ServerProviderUsageLimits | undefined>>(
         Effect.succeed(undefined),
       );
-      const h = yield* makeHarness({ usageProbe: Ref.get(currentProbe).pipe(Effect.flatten) });
+      const h = yield* makeHarness({ probeUsage: Ref.get(currentProbe).pipe(Effect.flatten) });
       yield* h.initialize;
       yield* Ref.set(
         currentProbe,
