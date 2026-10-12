@@ -47,6 +47,10 @@
       "types": "./src/userMessage.ts",
       "default": "./src/userMessage.ts"
     },
+    "./prompt-links": {
+      "types": "./src/promptLinks.ts",
+      "default": "./src/promptLinks.ts"
+    },
     "./secret-request": {
       "types": "./src/secretRequest.ts",
       "default": "./src/secretRequest.ts"
@@ -406,6 +410,18 @@
     "./source-control-clients": {
       "types": "./src/sourceControlClients.ts",
       "default": "./src/sourceControlClients.ts"
+    },
+    "./review-guide-tour": {
+      "types": "./src/reviewGuideTour.ts",
+      "default": "./src/reviewGuideTour.ts"
+    },
+    "./state/query-persistence": {
+      "types": "./src/state/queryPersistence.ts",
+      "default": "./src/state/queryPersistence.ts"
+    },
+    "./pull-request-markdown": {
+      "types": "./src/pullRequestMarkdown.ts",
+      "default": "./src/pullRequestMarkdown.ts"
     }
   },
   "scripts": {

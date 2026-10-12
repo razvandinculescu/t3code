@@ -1,7 +1,6 @@
 // Typecheck entry point for every package: `node <root>/scripts/tsc.mjs --noEmit`.
-// On Linux it runs tsc-rs, the Rust port of TypeScript 7 (same options and diagnostics,
-// about 2.7x faster here); elsewhere it runs TypeScript's tsc, since tsc-rs 0.2.0 ships no
-// Windows binary. Arguments pass through unchanged.
+// The fork uses tsc-rs on Linux and keeps TypeScript's tsc on Windows/macOS.
+// Arguments pass through unchanged.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeModule from "node:module";
