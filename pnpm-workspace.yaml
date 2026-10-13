@@ -20,7 +20,7 @@ allowBuilds:
   node-pty: true
   # Ships N-API prebuilds; its install script only rebuilds from source.
   objc-js: false
-  "react-native-enriched-markdown@file:apps/mobile/deps/react-native-enriched-markdown-1.2.0-t3.10.tgz": true
+  "react-native-enriched-markdown@file:apps/mobile/deps/react-native-enriched-markdown-1.2.0-t3.11.tgz": true
   sharp: true
   # Its install script only swaps the Node launcher for a sh one (~22 ms per run).
   tsc-rs: false

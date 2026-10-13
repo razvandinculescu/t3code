@@ -5,7 +5,6 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -42,11 +41,6 @@ export type CommandAvailabilityChecker = (
   command: string,
   options?: CommandAvailabilityOptions,
 ) => Effect.Effect<boolean, never, FileSystem.FileSystem | Path.Path>;
-
-export class CommandResolutionError extends Data.TaggedError("CommandResolutionError")<{
-  readonly command: string;
-  readonly reason: "not-found";
-}> {}
 
 const WINDOWS_SHELL_META_CHARS = /([()\][%!^"`<>&|;, *?])/g;
 
@@ -645,9 +639,6 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
   const nowNanos = yield* Clock.monotonicTimeNanos;
   const cached = cache.get(cacheKey);
   if (cached !== undefined && cached.expiresAtNanos > nowNanos) {
-    if (cached.resolvedPath === null) {
-      return null;
-    }
     return cached.resolvedPath;
   }
 
@@ -683,27 +674,14 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
   return null;
 });
 
-/** Find an optional executable without reporting its absence as a failed operation. */
-export const findCommandPath = Effect.fn("shell.findCommandPath")(function* (
-  command: string,
-  options: CommandAvailabilityOptions = {},
-) {
-  const resolved = yield* resolveCommandPathForPlatform(command, {
-    env: options.env ?? (yield* HostProcess.Environment),
-    platform: yield* HostProcess.Platform,
-  });
-  return resolved;
-});
-
 export const resolveCommandPath = Effect.fn("shell.resolveCommandPath")(function* (
   command: string,
   options: CommandAvailabilityOptions = {},
 ) {
-  const resolved = yield* findCommandPath(command, options);
-  if (resolved === null) {
-    return yield* new CommandResolutionError({ command, reason: "not-found" });
-  }
-  return resolved;
+  return yield* resolveCommandPathForPlatform(command, {
+    env: options.env ?? (yield* HostProcess.Environment),
+    platform: yield* HostProcess.Platform,
+  });
 });
 
 // Git for Windows 2.56 moved x64 builds from mingw64 to ucrt64; ARM64 builds
@@ -813,7 +791,7 @@ export const isCommandAvailable = Effect.fn("shell.isCommandAvailable")(function
   command: string,
   options: CommandAvailabilityOptions = {},
 ) {
-  return (yield* findCommandPath(command, options)) !== null;
+  return (yield* resolveCommandPath(command, options)) !== null;
 });
 
 export function resolveKnownWindowsCliDirs(env: NodeJS.ProcessEnv): ReadonlyArray<string> {
