@@ -429,7 +429,7 @@
     }
   },
   "scripts": {
-    "typecheck": "node ../../scripts/tsc.mjs --noEmit",
+    "typecheck": "tsc-rs --noEmit",
     "test": "vp test run"
   },
   "dependencies": {

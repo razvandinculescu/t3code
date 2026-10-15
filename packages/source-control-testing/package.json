@@ -9,7 +9,7 @@
     }
   },
   "scripts": {
-    "typecheck": "node ../../scripts/tsc.mjs --noEmit"
+    "typecheck": "tsc-rs --noEmit"
   },
   "dependencies": {
     "@t3tools/contracts": "workspace:*",
