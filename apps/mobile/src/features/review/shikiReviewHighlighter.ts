@@ -545,14 +545,11 @@ async function highlightLines(
   const highlighter = await getHighlighter();
   const sourceLines = code.split("\n");
   const highlightedLines: Array<ReadonlyArray<ReviewHighlightedToken>> = [];
-  // Batches resume from the previous batch's grammar state, so a comment or
-  // template string that spans a batch boundary keeps its colors.
   let grammarState: GrammarState | undefined;
   let start = 0;
   let sliceStartedAt = performance.now();
 
   while (start < sourceLines.length) {
-    // A skipped line leaves its ending state unknown; resume from a fresh state.
     if (sourceLines[start]!.length > REVIEW_TOKENIZE_MAX_LINE_LENGTH) {
       highlightedLines.push([{ content: sourceLines[start]!, color: null, fontStyle: null }]);
       grammarState = undefined;

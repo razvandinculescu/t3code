@@ -2,7 +2,7 @@ import { withVisibleControlCharacters } from "@t3tools/client-runtime/work-log/c
 import { memo, useMemo } from "react";
 import { Text as NativeText } from "react-native";
 
-import { AppText } from "../../components/AppText";
+import { AppText } from "../../components/ui/AppText";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
   createMarkdownCodeHighlightAtomFamily,
