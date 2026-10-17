@@ -16,8 +16,9 @@ import {
 } from "@t3tools/provider-core/server/usageLimits";
 
 const ENDPOINTS = [
-  "https://daily-cloudcode-pa.googleapis.com",
+  // Daily can omit Gemini while still returning valid third-party quota buckets.
   "https://cloudcode-pa.googleapis.com",
+  "https://daily-cloudcode-pa.googleapis.com",
 ];
 const MANUAL_REDIRECT: RequestInit = { redirect: "manual" };
 const TokenFile = Schema.Struct({

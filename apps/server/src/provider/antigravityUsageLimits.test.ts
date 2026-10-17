@@ -52,6 +52,7 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     summary?: unknown;
     models?: unknown;
     summaryStatus?: number;
+    summaryByOrigin?: Readonly<Record<string, { body: unknown; status?: number }>>;
     tokenStatus?: number;
     refreshToken?: string;
     userId?: string;
@@ -103,10 +104,13 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
         );
       }
       expect(JSON.parse(body)).toEqual({ project: "project-id" });
+      const endpointSummary = options.summaryByOrigin?.[new URL(request.url).origin];
       return HttpClientResponse.fromWeb(
         request,
         request.url.endsWith(":retrieveUserQuotaSummary")
-          ? Response.json(options.summary ?? summary, { status: options.summaryStatus ?? 200 })
+          ? Response.json(endpointSummary?.body ?? options.summary ?? summary, {
+              status: endpointSummary?.status ?? options.summaryStatus ?? 200,
+            })
           : Response.json(options.models ?? { models: {} }),
       );
     }),
@@ -119,6 +123,26 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
 });
 
 describe("Antigravity subscription limits", () => {
+  it.effect("keeps Gemini limits when the daily endpoint only reports Claude and GPT", () =>
+    Effect.gen(function* () {
+      const { probe } = yield* fixture({
+        summaryByOrigin: {
+          "https://cloudcode-pa.googleapis.com": { body: summary },
+          "https://daily-cloudcode-pa.googleapis.com": {
+            body: { groups: [summary.groups[1]] },
+          },
+        },
+      });
+      const limits = yield* probe;
+      expect(limits.windows.map((window) => window.id).sort()).toEqual([
+        "3p-5h",
+        "3p-weekly",
+        "gemini-5h",
+        "gemini-weekly",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("reports separate Gemini and shared Claude/GPT five-hour and weekly limits", () =>
     Effect.gen(function* () {
       const { probe, requests } = yield* fixture();
@@ -143,6 +167,24 @@ describe("Antigravity subscription limits", () => {
       expect(
         requests.filter((request) => request.url.endsWith(":retrieveUserQuotaSummary")),
       ).toHaveLength(2);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("uses the daily endpoint when the primary quota summary is unavailable", () =>
+    Effect.gen(function* () {
+      const { probe } = yield* fixture({
+        summaryByOrigin: {
+          "https://cloudcode-pa.googleapis.com": { body: {}, status: 503 },
+          "https://daily-cloudcode-pa.googleapis.com": { body: summary },
+        },
+      });
+      const limits = yield* probe;
+      expect(limits.windows.map((window) => window.id).sort()).toEqual([
+        "3p-5h",
+        "3p-weekly",
+        "gemini-5h",
+        "gemini-weekly",
+      ]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
