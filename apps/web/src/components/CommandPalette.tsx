@@ -55,7 +55,7 @@ import {
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
-import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
@@ -161,7 +161,7 @@ import {
   newProjectId,
 } from "../lib/utils";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
-import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
+import { buildThreadRouteParams } from "../threadRoutes";
 import { useAvailableSettingsSearchItems } from "./settings/useAvailableSettingsSearchItems";
 import {
   applyWslEnvironmentConfiguration,
@@ -236,7 +236,7 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
-import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
+import { getProjectOrderKey } from "../logicalProject";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import {
   buildSidebarProjectPickerEntries,
@@ -245,6 +245,7 @@ import {
 import type { Project } from "../types";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
+import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 
@@ -439,6 +440,14 @@ function useProjectLookups(projects: ReturnType<typeof useProjects>) {
   return { projectCwdById, projectByKey, projectTitleById };
 }
 
+const selectCommandPaletteClientSettings = (settings: ClientSettings) => ({
+  sidebarProjectGroupingMode: settings.sidebarProjectGroupingMode,
+  sidebarProjectGroupingOverrides: settings.sidebarProjectGroupingOverrides,
+  sidebarProjectSortOrder: settings.sidebarProjectSortOrder,
+  sidebarThreadSortOrder: settings.sidebarThreadSortOrder,
+});
+type CommandPaletteClientSettings = ReturnType<typeof selectCommandPaletteClientSettings>;
+
 function useSortedProjectGroups({
   projects,
   projectOrder,
@@ -449,14 +458,17 @@ function useSortedProjectGroups({
 }: {
   readonly projects: ReturnType<typeof useProjects>;
   readonly projectOrder: ReturnType<typeof useUiStateStore.getState>["projectOrder"];
-  readonly clientSettings: ClientSettings;
+  readonly clientSettings: CommandPaletteClientSettings;
   readonly primaryEnvironmentId: ReturnType<typeof usePrimaryEnvironmentId>;
   readonly environmentLabelById: ReadonlyMap<EnvironmentId, string>;
   readonly threads: ReturnType<typeof useThreadShells>;
 }) {
   // oxlint-disable-next-line t3code/no-manual-memo -- Kept until the palette's item building moves out of this component (see above).
   "use memo";
-  const projectGroupingSettings = selectProjectGroupingSettings(clientSettings);
+  const projectGroupingSettings = {
+    sidebarProjectGroupingMode: clientSettings.sidebarProjectGroupingMode,
+    sidebarProjectGroupingOverrides: clientSettings.sidebarProjectGroupingOverrides,
+  };
   const orderedProjects = orderItemsByPreferredIds({
     items: projects,
     preferredIds: projectOrder,
@@ -494,10 +506,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme, appearanceMode, setAppearanceMode } = useTheme();
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
-  const routeTarget = useParams({
-    strict: false,
-    select: (params) => resolveThreadRouteTarget(params),
-  });
+  const routeTarget = useThreadRouteTarget();
   const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
   const terminalOpen = useTerminalUiStateStore((state) =>
     routeThreadRef
@@ -715,7 +724,7 @@ function OpenCommandPaletteDialog(props: {
     highlightClearedRef.current = true;
     setHighlightedItemValue(null);
   }
-  const clientSettings = useClientSettings();
+  const clientSettings = useClientSettings(selectCommandPaletteClientSettings);
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
@@ -745,10 +754,7 @@ function OpenCommandPaletteDialog(props: {
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
-  const paletteRouteTarget = useParams({
-    strict: false,
-    select: (params) => resolveThreadRouteTarget(params),
-  });
+  const paletteRouteTarget = useThreadRouteTarget();
   const projects = useProjects();
   const referenceThreadRef =
     pathname === "/pull-requests"
