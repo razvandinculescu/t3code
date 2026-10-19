@@ -218,6 +218,7 @@ export function PoolSegment({
   account,
   window,
   reset,
+  refillPercent,
   color,
   now,
   index,
@@ -227,6 +228,7 @@ export function PoolSegment({
   readonly account: LimitAccount;
   readonly window: LimitPoolMember["window"];
   readonly reset: LimitPoolWindow["resets"][number] | undefined;
+  readonly refillPercent: number;
   readonly color: string;
   readonly now: number;
   readonly index: number;
@@ -258,12 +260,12 @@ export function PoolSegment({
           className="absolute inset-y-0 left-0 rounded-md opacity-35"
           style={{ width: `${remaining}%`, backgroundColor: color }}
         />
-        {remaining < 100 && reset ? (
+        {remaining < 100 && reset && refillPercent > 0 ? (
           <div
             aria-hidden
             className="absolute inset-y-0 right-0 opacity-20"
             style={{
-              width: `${100 - remaining}%`,
+              width: `${Math.min(100 - remaining, refillPercent)}%`,
               backgroundImage: `repeating-linear-gradient(135deg, ${color} 0 1px, transparent 1px 5px)`,
             }}
           />
@@ -286,23 +288,24 @@ export function PoolSegment({
               <span className="shrink-0 font-semibold text-foreground tabular-nums">
                 {remaining}%
               </span>
-              {/* Countdown and badge get their own plate: fill and hatching run under them otherwise. */}
-              <span className="ms-auto flex shrink-0 items-center gap-1.5 rounded-sm bg-background/85 px-1.5 py-0.5 text-2xs text-foreground tabular-nums">
-                {resetsIn?.replace("resets in ", "↻ ") ?? ""}
-                {credits ? (
-                  <>
-                    {resetsIn ? (
-                      <span aria-hidden className="text-muted-foreground">
-                        ·
+              {resetsIn || credits ? (
+                <span className="ms-auto flex shrink-0 items-center gap-1.5 rounded-sm bg-background/85 px-1.5 py-0.5 text-2xs text-foreground tabular-nums">
+                  {resetsIn?.replace("resets in ", "↻ ") ?? ""}
+                  {credits ? (
+                    <>
+                      {resetsIn ? (
+                        <span aria-hidden className="text-muted-foreground">
+                          ·
+                        </span>
+                      ) : null}
+                      <span aria-hidden className="inline-flex items-center gap-0.5 font-semibold">
+                        <TicketIcon className="size-3" aria-hidden />
+                        {credits}
                       </span>
-                    ) : null}
-                    <span aria-hidden className="inline-flex items-center gap-0.5 font-semibold">
-                      <TicketIcon className="size-3" aria-hidden />
-                      {credits}
-                    </span>
-                  </>
-                ) : null}
-              </span>
+                    </>
+                  ) : null}
+                </span>
+              ) : null}
             </div>
           </>
         )}
@@ -427,10 +430,11 @@ function RedeemableSegmentPopup({
         onConfirm={() => void redeem.redeem()}
         disabled={!redeem.canManageProviders}
       />
-      {/* The popover closed before the confirm, so the outcome needs a home outside it. */}
-      {redeem.status ? (
+      {/* The popover closed before the confirm, so progress and the outcome need a home outside it. */}
+      {redeem.busy || redeem.status ? (
         <span role="status" className="col-span-full text-xs text-muted-foreground">
-          <AccountName account={account} className="font-medium text-foreground" /> {redeem.status}
+          <AccountName account={account} className="font-medium text-foreground" />{" "}
+          {redeem.busy ? "Using reset credit…" : redeem.status}
         </span>
       ) : null}
     </>
@@ -460,6 +464,7 @@ function PoolBar({
               account={member.account}
               window={member.window}
               reset={restores.get(member.account.key)}
+              refillPercent={member.refillPercent}
               color={color}
               now={now}
               index={position + 1}

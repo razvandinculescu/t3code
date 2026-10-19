@@ -88,6 +88,7 @@ function AccountCards({
                           account={account}
                           window={member.window}
                           reset={reset}
+                          refillPercent={member.refillPercent}
                           color={barColor(account.driver)}
                           now={now}
                           index={1}

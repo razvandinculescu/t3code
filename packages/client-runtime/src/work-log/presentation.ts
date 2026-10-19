@@ -48,17 +48,30 @@ export function toolItemForDisplay(item: OrchestrationV2TurnItem): Orchestration
   }
 }
 
-export function contextCompactionLabel(
-  item: Pick<
-    Extract<OrchestrationV2TurnItem, { type: "compaction" }>,
-    "status" | "beforeTokenCount" | "afterTokenCount"
-  >,
-): string {
-  if (item.status === "running") return "Compacting context";
-  if (item.beforeTokenCount !== undefined && item.afterTokenCount !== undefined) {
-    return `Context compacted ${formatTokens(item.beforeTokenCount)} → ${formatTokens(item.afterTokenCount)} tokens`;
+type CompactionLabelItem = Pick<
+  Extract<OrchestrationV2TurnItem, { type: "compaction" }>,
+  "status" | "beforeTokenCount" | "afterTokenCount"
+>;
+
+export function contextCompactionTokenCounts(
+  item: CompactionLabelItem,
+): { readonly before: string; readonly after: string } | null {
+  if (
+    item.status === "running" ||
+    item.beforeTokenCount === undefined ||
+    item.afterTokenCount === undefined
+  ) {
+    return null;
   }
-  return "Context compacted";
+  return { before: formatTokens(item.beforeTokenCount), after: formatTokens(item.afterTokenCount) };
+}
+
+export function contextCompactionLabel(item: CompactionLabelItem): string {
+  if (item.status === "running") return "Compacting context";
+  const tokens = contextCompactionTokenCounts(item);
+  return tokens
+    ? `Context compacted ${tokens.before} → ${tokens.after} tokens`
+    : "Context compacted";
 }
 
 export interface WorkLogPresentationEntry {
@@ -358,7 +371,8 @@ function workEntryIndicatesToolFailureFromOutput(
   entry: WorkLogPresentationEntry,
   includeCommand: boolean,
 ): boolean {
-  // Thinking can quote failures without being a failed tool call.
+  // Reasoning can quote failures without being a failed tool call; scanning its
+  // long prose also adds unnecessary work when rendering the timeline.
   if (entry.itemType === "reasoning") return false;
   if (
     entry.tone === "error" ||
