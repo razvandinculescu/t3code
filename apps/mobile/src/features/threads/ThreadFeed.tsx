@@ -1,10 +1,11 @@
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
+import { useWorkspaceSettledContentWidth } from "../layout/workspace-content-width";
 import { ThreadMarkdownVideo, ThreadMediaVisibleContext } from "./ThreadMarkdownVideo";
 import { useMarkdownImageSource } from "../../native/useMarkdownImageSource";
+import { enrichedContextLinkCustomization } from "../../native/useEnrichedLinkVariants";
 import {
-  enrichedContextLinkPresentation,
   enrichedSkillDisplayName,
   enrichedSkillInstructionsPath,
   enrichedSkillReference,
@@ -172,7 +173,6 @@ import {
   resolveNativeMarkdownTypography,
 } from "../../lib/appearancePreferences";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import { markdownFileIconSource } from "../../lib/markdownFileIcons";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
 import { markdownLinkIconSource } from "../../lib/markdownLinkIcons";
 import {
@@ -869,8 +869,6 @@ function useMarkdownStyles(): MarkdownStyleSets {
   const markdownUserCodeText = theme["--color-md-user-code-text"];
   const markdownUserInlineCodeText = theme["--color-user-bubble-foreground-muted"];
   const markdownUserFenceBg = theme["--color-md-user-fence-bg"];
-  const inlineSkillForeground = theme["--color-inline-skill-foreground"];
-  const userBubbleSkillForeground = theme["--color-user-bubble-skill-foreground"];
   const regularFontFamily = FONT_FAMILIES.regular;
   const boldFontFamily = FONT_FAMILIES.bold;
 
@@ -887,7 +885,6 @@ function useMarkdownStyles(): MarkdownStyleSets {
           codeBackgroundColor: markdownUserCodeBg,
           codeBlockBackgroundColor: markdownUserFenceBg,
           fileTextColor: markdownUserBodyColor,
-          skillTextColor: userBubbleSkillForeground,
           quoteMarkerColor: markdownUserBodyColor,
           dividerColor: markdownUserBodyColor,
           contextChipBorderColor,
@@ -910,7 +907,6 @@ function useMarkdownStyles(): MarkdownStyleSets {
           codeBackgroundColor: markdownCodeBg,
           codeBlockBackgroundColor: markdownCodeBg,
           fileTextColor: markdownCodeText,
-          skillTextColor: inlineSkillForeground,
           quoteMarkerColor: markdownBlockquoteBorder,
           dividerColor: markdownHrColor,
           contextChipBorderColor,
@@ -926,7 +922,6 @@ function useMarkdownStyles(): MarkdownStyleSets {
   }, [
     boldFontFamily,
     contextChipBorderColor,
-    inlineSkillForeground,
     markdownBlockquoteBorder,
     markdownBodyColor,
     markdownCodeBg,
@@ -942,7 +937,6 @@ function useMarkdownStyles(): MarkdownStyleSets {
     markdownUserInlineCodeText,
     nativeMarkdownTypography,
     regularFontFamily,
-    userBubbleSkillForeground,
   ]);
 }
 
@@ -1574,12 +1568,9 @@ function UserMessageContent(props: UserMessageContentProps) {
                 });
             }
           },
-          linkCustomization: (href) => {
-            const presentation = enrichedContextLinkPresentation(href, props.context?.records);
-            return presentation
-              ? { color: presentation.color, icon: markdownFileIconSource(presentation.icon) }
-              : props.linkHandlers.linkCustomization?.(href);
-          },
+          linkCustomization: (href) =>
+            enrichedContextLinkCustomization(href, props.context?.records ?? []) ??
+            props.linkHandlers.linkCustomization?.(href),
         }}
       />
       {selected ? (
@@ -1722,9 +1713,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     // This never runs for scrolling, streamed output, or disclosure toggles.
     listRef.current?.clearCaches({ mode: "sizes" });
   }, [workLogLayoutKey, listRef]);
-  const [viewportWidth, setViewportWidth] = useState(() =>
+  const settledPaneWidth = useWorkspaceSettledContentWidth();
+  const [measuredViewportWidth, setViewportWidth] = useState(() =>
     props.layoutVariant === "split" ? 0 : windowWidth,
   );
+  const viewportWidth =
+    settledPaneWidth !== null ? Math.round(settledPaneWidth) : measuredViewportWidth;
   const [viewportHeight, setViewportHeight] = useState(0);
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
   // LegendList's maintainScrollAtEnd alone re-pins the feed whenever the
@@ -2442,6 +2436,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     if (previousContentWidth.current === contentWidth) return;
     previousContentWidth.current = contentWidth;
     if (hasHtmlRenders) listRef.current?.clearCaches({ mode: "sizes" });
+    // A reflow can grow the visible rows past LegendList's near-end threshold in one batch, and
+    // maintainScrollAtEnd then stops following. Pin the end the feed was following once the new
+    // sizes are in.
+    if (!endFollowEnabledRef.current || !listRef.current?.getState().isAtEnd) return;
+    const frame = requestAnimationFrame(() => {
+      if (endFollowEnabledRef.current) void listRef.current?.scrollToEnd({ animated: false });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [contentWidth, hasHtmlRenders, listRef]);
 
   const renderItem = (info: { item: PendingThreadFeedEntry; index: number }) => (
