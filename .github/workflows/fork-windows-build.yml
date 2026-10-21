@@ -38,7 +38,8 @@ jobs:
               - --filter=@t3tools/mobile...
               - --filter=@t3tools/scripts...
       - name: Test mobile startup and update lifecycle
-        run: vp test run apps/mobile/src/features/updates/app-updates.native-import.test.ts apps/mobile/src/features/updates/app-updates.test.ts apps/mobile/src/lib/runtimePolyfills.test.ts
+        working-directory: apps/mobile
+        run: vp test run src/features/updates/app-updates.native-import.test.ts src/features/updates/app-updates.test.ts src/lib/runtimePolyfills.test.ts
       - name: Generate native iOS project
         env:
           T3_IOS_BUILD_NUMBER: ${{ inputs.build-number }}
