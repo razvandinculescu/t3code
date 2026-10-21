@@ -1,5 +1,5 @@
 import * as Updates from "expo-updates";
-// Metro's dynamic namespace import evaluates unlinked legacy native exports too.
+// Metro namespace imports evaluate unrelated React Native getters, including unavailable native modules.
 import { AppState } from "react-native";
 
 import {
