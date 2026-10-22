@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import * as NodeFS from "node:fs";
 import * as NodeReadline from "node:readline";
+if (process.argv.includes("--t3-usage-limits-json")) {
+  process.exit(1);
+}
 const requiredCwd = process.env.T3_CLAUDE_REQUIRED_CWD;
 if (requiredCwd && process.cwd() !== NodeFS.realpathSync(requiredCwd)) {
   process.stderr.write(`claude: refusing to run outside ${requiredCwd}\n`);

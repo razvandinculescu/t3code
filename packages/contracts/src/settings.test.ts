@@ -9,6 +9,7 @@ import {
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
   requiredScopesForProjectMutation,
+  resolveIdleCompaction,
   resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
   ServerSettings,
@@ -134,62 +135,27 @@ describe("custom model settings", () => {
   });
 });
 
-describe("ClaudeSettings customModels", () => {
-  it("decodes bare slugs and object entries with inline capabilities", () => {
-    const settings = decodeClaudeSettings({
-      customModels: [
-        "k3-256k",
-        {
-          slug: "k3",
-          capabilities: {
-            optionDescriptors: [
-              {
-                id: "effort",
-                label: "Reasoning",
-                type: "select",
-                options: [{ id: "high", label: "High", isDefault: true }],
-                promptInjectedValues: ["ultrathink"],
-              },
-            ],
-          },
-        },
-      ],
-    });
-
-    expect(settings.customModels).toEqual([
-      "k3-256k",
-      {
-        slug: "k3",
-        capabilities: {
-          optionDescriptors: [
-            {
-              id: "effort",
-              label: "Reasoning",
-              type: "select",
-              options: [{ id: "high", label: "High", isDefault: true }],
-              promptInjectedValues: ["ultrathink"],
-            },
-          ],
-        },
+describe("resolveIdleCompaction", () => {
+  it("lets a Claude instance override the global default", () => {
+    const settings = decodeServerSettings({
+      compactIdleThreads: "off",
+      providerInstances: {
+        claude_work: { driver: "claudeAgent", config: { idleCompaction: "onReturn" } },
+        claude_personal: { driver: "claudeAgent" },
       },
-    ]);
+    });
+    expect(resolveIdleCompaction(settings, ProviderInstanceId.make("claude_work"))).toBe(
+      "onReturn",
+    );
+    expect(resolveIdleCompaction(settings, ProviderInstanceId.make("claude_personal"))).toBe("off");
+    expect(resolveIdleCompaction(settings, ProviderInstanceId.make("claudeAgent"))).toBe("off");
   });
 
-  it("rejects object entries without a usable slug or with malformed capabilities", () => {
-    expect(() => decodeClaudeSettings({ customModels: [{ slug: " " }] })).toThrow();
-    expect(() =>
-      decodeClaudeSettings({
-        customModels: [{ slug: "k3", capabilities: { optionDescriptors: [42] } }],
-      }),
-    ).toThrow();
-  });
-
-  it("accepts object entries at the settings patch boundary", () => {
-    expect(
-      decodeServerSettingsPatch({
-        providers: { claudeAgent: { customModels: [{ slug: "k3" }, "k3-256k"] } },
-      }),
-    ).toBeDefined();
+  it("keeps the legacy beta switch's behavior", () => {
+    expect(decodeServerSettings({ compactIdleThreads: true }).compactIdleThreads).toBe(
+      "beforeCacheExpires",
+    );
+    expect(decodeServerSettings({}).compactIdleThreads).toBe("onReturn");
   });
 });
 
@@ -372,5 +338,64 @@ describe("server model preferences", () => {
     const input = { favorites: [], providerModelPreferences: {} };
     expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
     expect(decodeServerSettingsPatch(input)).toEqual(input);
+  });
+});
+
+describe("ClaudeSettings customModels", () => {
+  it("decodes bare slugs and object entries with inline capabilities", () => {
+    const settings = decodeClaudeSettings({
+      customModels: [
+        "k3-256k",
+        {
+          slug: "k3",
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "effort",
+                label: "Reasoning",
+                type: "select",
+                options: [{ id: "high", label: "High", isDefault: true }],
+                promptInjectedValues: ["ultrathink"],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(settings.customModels).toEqual([
+      "k3-256k",
+      {
+        slug: "k3",
+        capabilities: {
+          optionDescriptors: [
+            {
+              id: "effort",
+              label: "Reasoning",
+              type: "select",
+              options: [{ id: "high", label: "High", isDefault: true }],
+              promptInjectedValues: ["ultrathink"],
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("rejects object entries without a usable slug or with malformed capabilities", () => {
+    expect(() => decodeClaudeSettings({ customModels: [{ slug: " " }] })).toThrow();
+    expect(() =>
+      decodeClaudeSettings({
+        customModels: [{ slug: "k3", capabilities: { optionDescriptors: [42] } }],
+      }),
+    ).toThrow();
+  });
+
+  it("accepts object entries at the settings patch boundary", () => {
+    expect(
+      decodeServerSettingsPatch({
+        providers: { claudeAgent: { customModels: [{ slug: "k3" }, "k3-256k"] } },
+      }),
+    ).toBeDefined();
   });
 });

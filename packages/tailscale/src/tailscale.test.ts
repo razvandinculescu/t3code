@@ -1,3 +1,4 @@
+import * as Duration from "effect/Duration";
 import * as Fiber from "effect/Fiber";
 
 import * as TestClock from "effect/testing/TestClock";
@@ -323,6 +324,30 @@ describe("tailscale", () => {
       assert.equal(attempts, 2);
       yield* Fiber.interrupt(fiber);
     }).pipe(Effect.scoped, Effect.provide(layer));
+  });
+  // regression: #21609 - without forceKillAfter a timed-out probe only gets
+  // SIGTERM, so a group member that ignores it outlives the call.
+  it.effect("escalates timed-out probes to SIGKILL", () => {
+    const killGraces: Array<number | undefined> = [];
+    const layer = layerSpawner(
+      ChildProcessSpawner.make((command) => {
+        if (command._tag === "StandardCommand") {
+          const { forceKillAfter } = command.options;
+          killGraces.push(
+            forceKillAfter === undefined
+              ? undefined
+              : Duration.toMillis(Duration.fromInputUnsafe(forceKillAfter)),
+          );
+        }
+        return Effect.succeed(mockHandle({ stdout: "{}" }));
+      }),
+    );
+
+    return Effect.gen(function* () {
+      yield* readTailscaleStatus.pipe(Effect.provide(layer));
+      yield* readTailscaleSshEnabled.pipe(Effect.provide(layer));
+      assert.deepEqual(killGraces, [500, 500]);
+    });
   });
 });
 
