@@ -55,6 +55,8 @@ jobs:
           cd apps/mobile
           vp exec expo prebuild --clean --platform ios
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $T3_IOS_BUILD_NUMBER" ios/T3CodeFork/Info.plist
+      - name: Verify native module discovery before compilation
+        run: vp run check:mobile:modules
       - name: Build iOS app
         env:
           T3_IOS_BUILD_NUMBER: ${{ inputs.build-number }}
