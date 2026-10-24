@@ -229,6 +229,8 @@ overrides:
   alchemy: 2.0.0-beta.80
   expo-audio: 58.0.9
   expo-network: 58.0.3
+  expo-modules-autolinking: 58.0.13
+  expo-notifications: 58.1.5
   "@clerk/expo-native-components": 0.4.0
   expo-sharing: 58.0.19
   expo-widgets: 58.0.20
@@ -389,6 +391,8 @@ patchedDependencies:
   # Android: Maven-resolved gradle plugins (expo-widgets) have no sourceDir; without this
   # skip, the fingerprint silently drops every Expo native module and OTAs reach stale binaries.
   "@expo/fingerprint@0.21.5": patches/@expo__fingerprint@0.21.5.patch
+  # Observe the owned host exit independently of descendants retaining its stdio.
+  "@muse-code/sdk@1.4.6": patches/@muse-code__sdk@1.4.6.patch
   app-builder-lib@26.16.1: patches/app-builder-lib@26.16.1.patch
 
 peerDependencyRules:
