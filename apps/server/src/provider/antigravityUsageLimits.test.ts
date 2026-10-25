@@ -53,6 +53,8 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     /** Per-host quota summaries; hosts not listed fall back to `summary`. */
     summaryByHost?: Record<string, unknown>;
     models?: unknown;
+    modelsByHost?: Record<string, unknown>;
+    modelsStatus?: number;
     summaryStatus?: number;
     summaryByOrigin?: Readonly<Record<string, { body: unknown; status?: number }>>;
     /** Per-host summary statuses; hosts not listed fall back to `summaryStatus`. */
@@ -125,7 +127,9 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
                   200,
               },
             )
-          : Response.json(options.models ?? { models: {} }),
+          : Response.json(options.modelsByHost?.[url.host] ?? options.models ?? { models: {} }, {
+              status: options.modelsStatus ?? 200,
+            }),
       );
     }),
   );
@@ -137,6 +141,43 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
 });
 
 describe("Antigravity subscription limits", () => {
+  it.effect("fills missing Gemini quotas when both summaries only report Claude and GPT", () =>
+    Effect.gen(function* () {
+      const { probe } = yield* fixture({
+        summary: { groups: [summary.groups[1]] },
+        models: {
+          models: {
+            "chat-internal": {
+              modelProvider: "MODEL_PROVIDER_GOOGLE",
+              quotaInfo: { remainingFraction: 0.75 },
+            },
+            "gemini-flash": {
+              modelProvider: "MODEL_PROVIDER_GOOGLE",
+              quotaInfo: { remainingFraction: 0.75, resetTime: "2026-10-25T15:00:00Z" },
+            },
+            "claude-sonnet": { quotaInfo: { remainingFraction: 0.1 } },
+            "gpt-model": { quotaInfo: { remainingFraction: 0.2 } },
+          },
+        },
+      });
+      const limits = yield* probe;
+      expect(limits.windows.map((window) => window.id).toSorted()).toEqual([
+        "3p-5h",
+        "3p-weekly",
+        "gemini-quota",
+      ]);
+      expect(limits.windows.find((window) => window.id === "gemini-quota")).toEqual({
+        id: "gemini-quota",
+        label: "Gemini · Reported quota",
+        kind: "other",
+        usedPercent: 25,
+        resetsAt: "2026-10-25T15:00:00.000Z",
+      });
+      expect(limits.windows.find((window) => window.id === "3p-5h")?.usedPercent).toBeCloseTo(56);
+      expect(limits.windows.find((window) => window.id === "3p-weekly")?.usedPercent).toBe(100);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("keeps Gemini limits when the daily endpoint only reports Claude and GPT", () =>
     Effect.gen(function* () {
       const { probe } = yield* fixture({
@@ -154,6 +195,29 @@ describe("Antigravity subscription limits", () => {
         "gemini-5h",
         "gemini-weekly",
       ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps a reported reset when an equally used endpoint omits it", () =>
+    Effect.gen(function* () {
+      const { probe } = yield* fixture({
+        summary: { groups: [summary.groups[1]] },
+        models: { models: { "gemini-a": { quotaInfo: { remainingFraction: 0.75 } } } },
+        modelsByHost: {
+          "daily-cloudcode-pa.googleapis.com": {
+            models: {
+              "gemini-a": {
+                quotaInfo: { remainingFraction: 0.75, resetTime: "2026-10-25T15:00:00Z" },
+              },
+            },
+          },
+        },
+      });
+      const limits = yield* probe;
+      expect(limits.windows.find((window) => window.id === "gemini-quota")).toMatchObject({
+        usedPercent: 25,
+        resetsAt: "2026-10-25T15:00:00.000Z",
+      });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -181,6 +245,9 @@ describe("Antigravity subscription limits", () => {
       expect(
         requests.filter((request) => request.url.endsWith(":retrieveUserQuotaSummary")),
       ).toHaveLength(4);
+      expect(requests.filter((request) => request.url.endsWith(":fetchAvailableModels"))).toEqual(
+        [],
+      );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -304,6 +371,48 @@ describe("Antigravity subscription limits", () => {
           (window) => window.kind === "other" && window.windowDurationMins === undefined,
         ),
       ).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("fills missing third-party families without duplicating Gemini summary windows", () =>
+    Effect.gen(function* () {
+      const { probe } = yield* fixture({
+        summary: { groups: [summary.groups[0]] },
+        models: {
+          models: {
+            "gemini-flash": { quotaInfo: { remainingFraction: 0 } },
+            "claude-sonnet": { quotaInfo: { remainingFraction: 0.25 } },
+            "gpt-model": { quotaInfo: { remainingFraction: 0.5 } },
+          },
+        },
+      });
+      const limits = yield* probe;
+      expect(limits.windows.map((window) => window.id).toSorted()).toEqual([
+        "claude-quota",
+        "gemini-5h",
+        "gemini-weekly",
+        "gpt-quota",
+      ]);
+      expect(
+        limits.windows.find((window) => window.id === "gemini-weekly")?.usedPercent,
+      ).toBeCloseTo(4);
+      expect(limits.windows.find((window) => window.id === "claude-quota")?.usedPercent).toBe(75);
+      expect(limits.windows.find((window) => window.id === "gpt-quota")?.usedPercent).toBe(50);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("preserves a partial summary when model quota requests fail", () =>
+    Effect.gen(function* () {
+      const { probe, requests } = yield* fixture({
+        summary: { groups: [summary.groups[1]] },
+        modelsStatus: 503,
+      });
+      const limits = yield* probe;
+      expect(limits.unavailable).toBeUndefined();
+      expect(limits.windows.map((window) => window.id).toSorted()).toEqual(["3p-5h", "3p-weekly"]);
+      expect(
+        requests.filter((request) => request.url.endsWith(":fetchAvailableModels")),
+      ).toHaveLength(2);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

@@ -125,6 +125,17 @@ function summaryWindows(summary: typeof Summary.Type) {
   return [...windows.values()];
 }
 
+function shouldReplaceQuotaWindow(
+  previous: ServerProviderUsageWindow | undefined,
+  next: ServerProviderUsageWindow,
+) {
+  return (
+    !previous ||
+    next.usedPercent > previous.usedPercent ||
+    (next.usedPercent === previous.usedPercent && !previous.resetsAt && next.resetsAt !== undefined)
+  );
+}
+
 /** Older accounts expose model quotas without a window length. Do not invent a reset cadence. */
 function modelWindows(models: typeof Models.Type) {
   const windows = new Map<string, ServerProviderUsageWindow>();
@@ -152,7 +163,7 @@ function modelWindows(models: typeof Models.Type) {
       );
       if (!window) continue;
       const previous = windows.get(window.id);
-      if (!previous || window.usedPercent > previous.usedPercent) windows.set(window.id, window);
+      if (shouldReplaceQuotaWindow(previous, window)) windows.set(window.id, window);
     }
   }
   return [...windows.values()];
@@ -273,18 +284,27 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
       const windows = new Map<string, ServerProviderUsageWindow>();
       for (const window of responses.flat()) {
         const previous = windows.get(window.id);
-        if (!previous || window.usedPercent > previous.usedPercent) windows.set(window.id, window);
+        if (shouldReplaceQuotaWindow(previous, window)) windows.set(window.id, window);
       }
       return [...windows.values()];
     });
     const summary = yield* fetchWindows("retrieveUserQuotaSummary", (response) =>
       decodeSummary(response).pipe(Effect.map(summaryWindows)),
     );
-    const windows = summary.length
-      ? summary
-      : yield* fetchWindows("fetchAvailableModels", (response) =>
-          decodeModels(response).pipe(Effect.map(modelWindows)),
-        );
+    const hasGeminiSummary = summary.some((window) => window.id.startsWith("gemini-"));
+    const hasSharedSummary = summary.some((window) => window.id.startsWith("3p-"));
+    const modelQuotas =
+      hasGeminiSummary && hasSharedSummary
+        ? []
+        : yield* fetchWindows("fetchAvailableModels", (response) =>
+            decodeModels(response).pipe(Effect.map(modelWindows)),
+          );
+    const windows = [
+      ...summary,
+      ...modelQuotas.filter((window) =>
+        window.id.startsWith("gemini-") ? !hasGeminiSummary : !hasSharedSummary,
+      ),
+    ];
     if (windows.length === 0) {
       return makeUnavailableUsageLimits({
         checkedAt,
