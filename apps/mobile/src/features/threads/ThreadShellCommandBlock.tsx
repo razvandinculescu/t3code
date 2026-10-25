@@ -4,15 +4,28 @@ import { Text as NativeText } from "react-native";
 
 import { AppText } from "../../components/ui/AppText";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import {
-  createMarkdownCodeHighlightAtomFamily,
-  useMarkdownCodeHighlight,
-} from "./markdownCodeHighlightState";
+import { useAtomValue } from "@effect/atom-react";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import { AsyncResult, Atom } from "effect/reactivity";
+import type { HighlightScheme } from "../../lib/highlights";
 import { highlightShellCommand } from "./shellCommandHighlight";
 
-const shellCommandHighlightAtom = createMarkdownCodeHighlightAtomFamily({
-  highlight: (input) => highlightShellCommand(input),
-});
+class CommandHighlightRequest extends Data.Class<{
+  readonly code: string;
+  readonly theme: HighlightScheme;
+}> {}
+class CommandHighlightError extends Data.TaggedError("CommandHighlightError")<{
+  readonly cause: unknown;
+}> {}
+const shellCommandHighlightAtom = Atom.family((request: CommandHighlightRequest) =>
+  Atom.make(
+    Effect.tryPromise({
+      try: () => highlightShellCommand(request),
+      catch: (cause) => new CommandHighlightError({ cause }),
+    }),
+  ).pipe(Atom.setIdleTTL(5 * 60_000)),
+);
 
 /** Mounted only for expanded commands; results reuse the bounded highlight cache. */
 export const ThreadShellCommandBlock = memo(function ThreadShellCommandBlock(props: {
@@ -20,15 +33,12 @@ export const ThreadShellCommandBlock = memo(function ThreadShellCommandBlock(pro
 }) {
   const { themeAppearance } = useAppearancePreferences();
   const code = useMemo(() => withVisibleControlCharacters(props.command.trim()), [props.command]);
-  const highlighted = useMarkdownCodeHighlight(
-    {
-      code,
-      enabled: true,
-      language: "shellscript",
-      theme: themeAppearance,
-    },
-    shellCommandHighlightAtom,
+  const atom = useMemo(
+    () => shellCommandHighlightAtom(new CommandHighlightRequest({ code, theme: themeAppearance })),
+    [code, themeAppearance],
   );
+  const result = useAtomValue(atom);
+  const highlighted = AsyncResult.isSuccess(result) ? result.value : null;
   const endings = code.match(/\r?\n/gu) ?? [];
   let offset = 0;
   return (

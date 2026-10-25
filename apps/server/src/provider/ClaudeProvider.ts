@@ -197,11 +197,7 @@ function apiProviderAuthMetadata(
   return apiProvider === "bedrock" ? { type: "bedrock", label: "Amazon Bedrock" } : undefined;
 }
 
-/**
- * The capability probe resolves for a logged-out CLI, so a completed probe only proves Claude
- * Code started. `tokenSource: "none"` is the CLI reporting it found no token at all, and is the
- * one shape that disproves authentication.
- */
+/** Probe completion only proves Claude started. Only tokenSource: "none" disproves auth. */
 function claudeAuthStatus(
   capabilities: Pick<
     ClaudeCapabilitiesProbe,
@@ -212,16 +208,14 @@ function claudeAuthStatus(
     return "authenticated";
   }
   if (capabilities.tokenSource !== "none") return "authenticated";
-  // An `ANTHROPIC_API_KEY` install reports no token source but is authenticated
-  // all the same, so the key and account fields still get a say.
+  // API keys can authenticate with tokenSource: none; also check key and account fields.
   const hasApiKey = Boolean(capabilities.apiKeySource) && capabilities.apiKeySource !== "none";
   return hasApiKey || capabilities.email || capabilities.subscriptionType
     ? "authenticated"
     : "unauthenticated";
 }
 
-// Amazon Bedrock initializes far slower than first-party auth: the SDK boots the Bedrock
-// backend and runs the `awsAuthRefresh` credential hook before returning account info.
+// Bedrock initialization includes backend startup and awsAuthRefresh, taking longer than first-party auth.
 const CAPABILITIES_PROBE_TIMEOUT_MS = 25_000;
 const EXTERNAL_USAGE_PROBE_TIMEOUT_MS = 10_000;
 const EXTERNAL_USAGE_PROBE_ARG = "--t3-usage-limits-json";
@@ -283,23 +277,17 @@ export function buildClaudeCapabilitiesProbeQueryOptions(input: {
     pathToClaudeCodeExecutable: input.executablePath,
     abortController: input.abortController,
     settingSources: [...CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES],
-    // The probe keeps filesystem setting sources for slash-command discovery,
-    // but must not run the user's hooks: it fires every few minutes, so
-    // SessionStart hooks would run on every health check.
+    // Keep settings for slash-command discovery, but disable hooks so health checks do not run SessionStart repeatedly.
     settings: { disableAllHooks: true },
     allowedTools: [],
-    // Ignore MCP definitions from every filesystem setting source above. The
-    // SDK combines this empty explicit map with --strict-mcp-config, which
-    // Claude refuses next to a managed-mcp.json that already excludes them.
+    // Exclude filesystem MCP servers; omit strict mode when managed-mcp.json already excludes them and forbids the flag.
     mcpServers: {},
     ...(input.managedMcpConfig ? {} : { strictMcpConfig: true }),
     env: {
       ...input.environment,
-      // Connected claude.ai MCP servers are discovered outside filesystem
-      // config; disable them independently for this health check.
+      // Disable claude.ai MCP separately; it is discovered outside filesystem config.
       ENABLE_CLAUDEAI_MCP_SERVERS: "false",
-      // Skipping it also avoids Claude spawning a Windows `tasklist | findstr` process tree on
-      // every periodic refresh.
+      // Skipping this avoids a Windows tasklist | findstr process tree on every refresh.
       FORCE_CODE_TERMINAL: undefined,
       CLAUDE_CODE_AUTO_CONNECT_IDE: "0",
       CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1",
@@ -320,18 +308,10 @@ export type ClaudeCapabilitiesProbe = {
   readonly subscriptionType: string | undefined;
   readonly tokenSource: string | undefined;
   readonly apiKeySource: string | undefined;
-  /**
-   * Active API backend reported by the SDK's `AccountInfo`. Anthropic OAuth
-   * login only applies when `"firstParty"`; for Amazon Bedrock (`"bedrock"`)
-   * the subscription/token fields are absent and auth is external AWS creds.
-   */
+  /** OAuth applies only to firstParty; Bedrock uses external AWS credentials and omits subscription/token fields. */
   readonly apiProvider: string | undefined;
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
-  /**
-   * Subscription windows from the SDK's `get_usage` control request, or
-   * `undefined` when the request itself failed. Absent windows on an
-   * otherwise successful response mean the account has none (API key).
-   */
+  /** Undefined means get_usage failed; absent windows on success mean no subscription windows, as with API keys. */
   readonly usage?: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
   readonly usageCheckedAt?: string;
 };
@@ -431,9 +411,7 @@ const probeClaudeCapabilitiesOnce = (
     const managedMcpConfig = yield* hasClaudeManagedMcpConfig();
     return yield* Effect.tryPromise(async () => {
       const q = claudeQuery({
-        // Never yield — we only need initialization data, not a conversation.
-        // This prevents any prompt from reaching the Anthropic API.
-        // oxlint-disable-next-line require-yield
+        // oxlint-disable-next-line require-yield -- never yields, so no prompt reaches the API
         prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
           await waitForAbortSignal(abort.signal);
         })(),
@@ -567,12 +545,9 @@ const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 /**
- * Optional wrapper protocol for Anthropic-compatible subscription providers.
- * Unknown binaries simply reject the flag and retain the normal unsupported
- * result; wrappers that own a credential return only normalized quota data.
- * Spawns the binary, so the driver memoizes it under the capabilities TTL
- * (`resolveExternalUsage` on `checkClaudeProviderStatus`); the limits carry
- * the time of that spawn, not of the status check that reused them.
+ * Wrappers return normalized quota data; unknown binaries reject the optional flag.
+ * The driver caches this subprocess probe under the capabilities TTL, so checkedAt
+ * records the probe time rather than a later status check that reuses its result.
  */
 export const probeExternalClaudeUsageLimits = Effect.fn("probeExternalClaudeUsageLimits")(
   function* (claudeSettings: ClaudeSettings, environment?: NodeJS.ProcessEnv) {

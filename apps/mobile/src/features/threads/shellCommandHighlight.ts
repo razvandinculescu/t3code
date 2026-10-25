@@ -4,16 +4,9 @@ import {
   type CommandSyntaxToken,
   type CommandTokenLines,
 } from "@t3tools/client-runtime/work-log/command-tokens";
-import {
-  highlightCodeSnippet,
-  type ReviewDiffTheme,
-  type ReviewHighlightedToken,
-} from "../review/shikiReviewHighlighter";
+import { highlightCode, type HighlightedLines, type HighlightScheme } from "../../lib/highlights";
 
-function withOffsets(
-  code: string,
-  lines: Awaited<ReturnType<typeof highlightCodeSnippet>>,
-): CommandTokenLines {
+function withOffsets(code: string, lines: HighlightedLines): CommandTokenLines {
   const endings = code.match(/\r?\n/gu) ?? [];
   let offset = 0;
   return lines.map((line, index) => {
@@ -30,17 +23,13 @@ function withOffsets(
 /** The mobile and web command views share script detection and escape mapping. */
 export async function highlightShellCommand(input: {
   readonly code: string;
-  readonly theme: ReviewDiffTheme;
-}): Promise<ReadonlyArray<ReadonlyArray<ReviewHighlightedToken>>> {
+  readonly theme: HighlightScheme;
+}): Promise<HighlightedLines> {
   const language = commandHighlightLanguage(input.code);
-  const outer = withOffsets(
-    input.code,
-    await highlightCodeSnippet({ ...input, language, palette: "pierre" }),
-  );
+  const outer = withOffsets(input.code, highlightCode(input.code, language, input.theme));
   if (language !== "shellscript" || input.code.length > 100_000) return normalize(outer);
   const { embeddedScripts } = await import("@t3tools/client-runtime/work-log/embedded-scripts");
   const scripts = embeddedScripts(input.code);
-  // Each expanded command loads only the grammars its scripts use.
   const tokens = new Map<string, Map<string, CommandTokenLines>>();
   for (const script of scripts) {
     let byText = tokens.get(script.language);
@@ -52,15 +41,7 @@ export async function highlightShellCommand(input: {
     try {
       byText.set(
         script.text,
-        withOffsets(
-          script.text,
-          await highlightCodeSnippet({
-            code: script.text,
-            language: script.language,
-            theme: input.theme,
-            palette: "pierre",
-          }),
-        ),
+        withOffsets(script.text, highlightCode(script.text, script.language, input.theme)),
       );
     } catch {
       // Retain the shell colors if a nested grammar is unavailable.
@@ -75,7 +56,7 @@ export async function highlightShellCommand(input: {
   );
 }
 
-function normalize(lines: CommandTokenLines): ReadonlyArray<ReadonlyArray<ReviewHighlightedToken>> {
+function normalize(lines: CommandTokenLines): HighlightedLines {
   return lines.map((line) =>
     line.map((token) => ({
       content: token.content,

@@ -1,24 +1,24 @@
-import { describe, expect, it } from "vite-plus/test";
-import { getSharedHighlighter } from "@pierre/diffs";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { codeToTokens } from "@pierre/highlights";
+import { pierreDark, pierreLight } from "@pierre/highlights/themes";
 
-import { highlightCodeSnippet } from "../review/shikiReviewHighlighter";
+import { highlightCode } from "../../lib/highlights";
+
+vi.mock("expo", async () => {
+  const { createWasmHighlightsModule } = await import("../../lib/highlights.testing");
+  return { requireOptionalNativeModule: () => createWasmHighlightsModule() };
+});
 import { highlightShellCommand } from "./shellCommandHighlight";
 
 describe("mobile shell command highlighting", () => {
   it.each(["light", "dark"] as const)(
-    "uses the desktop Pierre palette in %s mode",
+    "uses the native Pierre palette in %s mode",
     async (theme) => {
       const code = 'printf "%s\\n" "$HOME" && git status --short';
-      const themeName = theme === "dark" ? "pierre-dark" : "pierre-light";
-      const desktop = await getSharedHighlighter({
-        themes: [themeName],
-        langs: ["shellscript"],
-        preferredHighlighter: "shiki-wasm",
-      });
-      const expected = desktop.codeToTokensBase(code, {
+      const expected = codeToTokens(code, {
         lang: "shellscript",
-        theme: themeName,
-      });
+        theme: theme === "dark" ? pierreDark : pierreLight,
+      }).tokens;
       const mobile = await highlightShellCommand({ code, theme });
       const colors = (lines: typeof mobile) =>
         lines.flatMap((line) =>
@@ -59,12 +59,7 @@ describe("mobile shell command highlighting", () => {
   it("uses PowerShell grammar for Windows commands", async () => {
     const code = "$env:PATH; Get-Process | Where-Object { $_.CPU -gt 1 }";
     expect(await highlightShellCommand({ code, theme: "dark" })).toEqual(
-      await highlightCodeSnippet({
-        code,
-        language: "powershell",
-        theme: "dark",
-        palette: "pierre",
-      }),
+      highlightCode(code, "powershell", "dark"),
     );
   });
 
@@ -72,12 +67,7 @@ describe("mobile shell command highlighting", () => {
     const script = "const answer = 42;\nconsole.log(answer);";
     const code = `node <<'JS'\n${script}\nJS`;
     const highlighted = await highlightShellCommand({ code, theme: "dark" });
-    const javascript = await highlightCodeSnippet({
-      code: script,
-      language: "javascript",
-      theme: "dark",
-      palette: "pierre",
-    });
+    const javascript = highlightCode(script, "javascript", "dark");
     expect(highlighted.map((line) => line.map((token) => token.content).join("")).join("\n")).toBe(
       code,
     );

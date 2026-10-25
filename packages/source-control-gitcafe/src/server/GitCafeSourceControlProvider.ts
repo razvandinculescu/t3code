@@ -22,6 +22,7 @@ import {
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
+import { parsePullRequestUrl } from "../shared/definition.ts";
 
 import * as GitCafeApi from "./GitCafeApi.ts";
 import * as GitCafeCredentials from "./GitCafeCredentials.ts";
@@ -80,7 +81,7 @@ const cliDiscovery = {
     const failure = cliFailure(input.stderr) ?? cliFailure(input.stdout);
     if (failure)
       return providerAuth({
-        // Only a refusal says the login is gone; a forbidden or offline answer says nothing.
+        // Forbidden/offline responses do not establish that a login is gone.
         status:
           failure.code === "AUTHENTICATION_REQUIRED" || failure.status === 401
             ? "unauthenticated"
@@ -176,8 +177,6 @@ const cloneUrls = (target: Target) => ({
 const isSshRemote = (remoteUrl: string | undefined) =>
   remoteUrl !== undefined && (/^ssh:\/\//iu.test(remoteUrl) || /^[^/:]+@[^/:]+:/u.test(remoteUrl));
 
-const pullUrlPattern = /^https:\/\/([^/]+)\/([^/]+\/[^/]+)\/pulls\/(\d+)\/?(?:[?#].*)?$/u;
-
 export const make = Effect.gen(function* () {
   const api = yield* GitCafeApi.GitCafeApi;
   const host = yield* SourceControlHost.SourceControlHost;
@@ -252,15 +251,15 @@ export const make = Effect.gen(function* () {
     readonly context?: SourceControlProvider.SourceControlProviderContext;
     readonly reference: string;
   }) {
-    const match = pullUrlPattern.exec(input.reference.trim());
-    const urlHost = match?.[1] ? GitCafeHosts.gitCafeHost(match[1]) : null;
+    const match = parsePullRequestUrl(input.reference.trim());
+    const urlHost = match === null ? null : GitCafeHosts.gitCafeHost(match.host);
     const target: Target =
-      urlHost && match?.[2]
-        ? { host: urlHost, repository: match[2] }
+      urlHost && match
+        ? { host: urlHost, repository: match.repository }
         : yield* resolveTarget("getChangeRequest", input);
     const number = match
       ? urlHost
-        ? match[3]
+        ? String(match.number)
         : undefined
       : /^#?([1-9]\d*)$/u.exec(input.reference.trim())?.[1];
     if (number === undefined)
@@ -325,7 +324,7 @@ export const make = Effect.gen(function* () {
           );
           for (const pull of page.items) {
             if (pull.sourceBranch !== branch || items.length >= limit) continue;
-            // List rows omit fork identity, so only the branch's own rows are read in full.
+            // List rows omit fork identity; read matching branches in full.
             const detail = yield* getPull({
               cwd: input.cwd,
               reference: `https://${target.host}/${target.repository}/pulls/${pull.number}`,
@@ -462,7 +461,7 @@ export const make = Effect.gen(function* () {
       );
       return repository.defaultBranch;
     }),
-    // `cafe` has no forced checkout, so the branch is fetched and switched to with git.
+    // `cafe` has no forced checkout.
     checkoutChangeRequest: Effect.fn("GitCafeSourceControlProvider.checkoutChangeRequest")(
       function* (input) {
         const pull = yield* getPull(input);
