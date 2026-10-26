@@ -687,6 +687,7 @@ it.effect(
       const entered = yield* Deferred.make<void>();
       const finish = yield* Deferred.make<ServerProviderUsageLimits>();
       const currentProbe = yield* Ref.make<Effect.Effect<ServerProviderUsageLimits | undefined>>(
+        // @effect-diagnostics-next-line effectSucceedWithVoid:off -- The resolver returns undefined; Effect.void widens it to void.
         Effect.succeed(undefined),
       );
       const h = yield* makeHarness({ probeUsage: Ref.get(currentProbe).pipe(Effect.flatten) });
