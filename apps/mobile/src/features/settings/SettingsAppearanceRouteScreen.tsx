@@ -1,6 +1,7 @@
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { TranscriptSettingsSection } from "./ThreadSettingsSections";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { CodeAppearanceSection } from "./appearance/sections/CodeAppearanceSection";
 import { TerminalAppearanceSection } from "./appearance/sections/TerminalAppearanceSection";
@@ -23,6 +24,7 @@ export function SettingsAppearanceRouteScreen() {
       >
         <ThemeAppearanceSection />
         <TextAppearanceSection />
+        <TranscriptSettingsSection />
         <TerminalAppearanceSection />
         <CodeAppearanceSection />
       </ScrollView>

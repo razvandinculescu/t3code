@@ -5168,6 +5168,176 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
+  it.effect.each([false, true])(
+    "an interrupted turn after a rollback stops resuming at the rolled-back head (restart=%s)",
+    (restart) =>
+      Effect.gen(function* () {
+        const interruptStarted = yield* Deferred.make<void>();
+        const harness = yield* makeWakeHarnessWithOptions({
+          interrupt: Deferred.succeed(interruptStarted, undefined),
+          close: (sdkMessages) => Queue.shutdown(sdkMessages),
+          freshQueueOnReopen: true,
+        });
+        const now = yield* DateTime.now;
+        const pinnedHead = "00000000-0000-4000-8000-000000025510";
+        const pinnedThread = {
+          ...harness.providerThread,
+          nativeConversationHeadRef: {
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeId: pinnedHead,
+            strength: "weak" as const,
+          },
+        };
+        const interruptedInput = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: pinnedThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-claude-interrupt-after-rollback"),
+          text: "The secret word is apricot-25510. Then run sleep 60.",
+          attachments: [],
+          providerTurnOrdinal: 2,
+          nativeThreadHasTurns: true,
+        });
+        yield* harness.runtime.startTurn(interruptedInput);
+        assert.equal(harness.getOpenedOptions()?.resumeSessionAt, pinnedHead);
+        yield* harness.offerAndWait(
+          makeAssistantTextFrame({
+            uuid: "00000000-0000-4000-8000-000000025511",
+            text: "Noted apricot-25510. Running sleep.",
+          }),
+        );
+        const stopping = yield* harness.runtime
+          .interruptTurn({
+            providerThread: pinnedThread,
+            providerTurnId: (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+              driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+              nativeTurnId: `turn:${interruptedInput.attemptId}`,
+            }),
+            requestRuntimeRestart: restart,
+          })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(interruptStarted);
+        if (!restart) {
+          yield* harness.offerAndWait(
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000025512",
+              result: "",
+              terminalReason: "aborted_streaming",
+            }),
+          );
+        }
+        yield* Fiber.join(stopping);
+        assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "interrupted");
+        const afterInterrupt = harness.events.findLast(
+          (event) => event.type === "provider_thread.updated",
+        )?.providerThread;
+        assert.isDefined(afterInterrupt);
+        assert.isNull(afterInterrupt.nativeConversationHeadRef);
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: afterInterrupt,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-after-interrupt"),
+            text: "What is the secret word?",
+            attachments: [],
+            providerTurnOrdinal: 3,
+            nativeThreadHasTurns: true,
+          }),
+        );
+        assert.equal(harness.processQueues.length, restart ? 2 : 1);
+        if (restart) assert.isUndefined(harness.getOpenedOptions()?.resumeSessionAt);
+        else assert.lengthOf(harness.offeredMessages, 2);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
+  it.effect.each([false, true])(
+    "an interrupted turn with no assistant output keeps the rolled-back head (restart=%s)",
+    (restart) =>
+      Effect.gen(function* () {
+        const interruptStarted = yield* Deferred.make<void>();
+        const harness = yield* makeWakeHarnessWithOptions({
+          interrupt: Deferred.succeed(interruptStarted, undefined),
+          close: (sdkMessages) => Queue.shutdown(sdkMessages),
+          freshQueueOnReopen: true,
+        });
+        const now = yield* DateTime.now;
+        const pinnedHead = "00000000-0000-4000-8000-000000025510";
+        const pinnedThread = {
+          ...harness.providerThread,
+          nativeConversationHeadRef: {
+            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+            nativeId: pinnedHead,
+            strength: "weak" as const,
+          },
+        };
+        const interruptedInput = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: pinnedThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-claude-silent-interrupt-after-rollback"),
+          text: "The secret word is apricot-25510. Then run sleep 60.",
+          attachments: [],
+          providerTurnOrdinal: 2,
+          nativeThreadHasTurns: true,
+        });
+        yield* harness.runtime.startTurn(interruptedInput);
+        assert.equal(harness.getOpenedOptions()?.resumeSessionAt, pinnedHead);
+        const stopping = yield* harness.runtime
+          .interruptTurn({
+            providerThread: pinnedThread,
+            providerTurnId: (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+              driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+              nativeTurnId: `turn:${interruptedInput.attemptId}`,
+            }),
+            requestRuntimeRestart: restart,
+          })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(interruptStarted);
+        if (!restart) {
+          yield* harness.offerAndWait(
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000025512",
+              result: "",
+              terminalReason: "aborted_streaming",
+            }),
+          );
+        }
+        yield* Fiber.join(stopping);
+        assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "interrupted");
+        const afterInterrupt = harness.events.findLast(
+          (event) => event.type === "provider_thread.updated",
+        )?.providerThread;
+        assert.isDefined(afterInterrupt);
+        assert.equal(afterInterrupt.nativeConversationHeadRef?.nativeId, pinnedHead);
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: afterInterrupt,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-after-silent-interrupt"),
+            text: "What is the secret word?",
+            attachments: [],
+            providerTurnOrdinal: 3,
+            nativeThreadHasTurns: true,
+          }),
+        );
+        assert.equal(harness.processQueues.length, restart ? 2 : 1);
+        assert.equal(harness.getOpenedOptions()?.resumeSessionAt, pinnedHead);
+        if (!restart) assert.lengthOf(harness.offeredMessages, 2);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
   it.effect("never records a subagent uuid for a turn with no main-thread assistant message", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarnessWithOptions({
