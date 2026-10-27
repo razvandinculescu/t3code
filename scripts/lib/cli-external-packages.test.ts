@@ -20,6 +20,9 @@ const PackageManifest = Schema.Struct({
   dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   optionalDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   peerDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  peerDependenciesMeta: Schema.optional(
+    Schema.Record(Schema.String, Schema.Struct({ optional: Schema.optional(Schema.Boolean) })),
+  ),
 });
 type PackageManifest = typeof PackageManifest.Type;
 
@@ -85,6 +88,37 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
   }).pipe(Effect.cached, Effect.runSync);
 
   const isRuntimeExternal = isRuntimeExternalCliDependency;
+
+  it.effect("declares required runtime peers of staged externals in the server manifest", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const manifest = decodeManifest(
+        yield* fileSystem.readFileString(
+          path.resolve(import.meta.dirname, "../../apps/server/package.json"),
+        ),
+      );
+      const dependencies = manifest.dependencies ?? {};
+      const missing: string[] = [];
+      for (const name of Object.keys(dependencies).filter(isRuntimeExternal)) {
+        const external = decodeManifest(
+          yield* fileSystem.readFileString(
+            path.resolve(
+              import.meta.dirname,
+              "../../apps/server/node_modules",
+              name,
+              "package.json",
+            ),
+          ),
+        );
+        for (const peer of Object.keys(external.peerDependencies ?? {})) {
+          if (external.peerDependenciesMeta?.[peer]?.optional) continue;
+          if (!(peer in dependencies)) missing.push(`${name} -> ${peer}`);
+        }
+      }
+      assert.deepStrictEqual(missing, []);
+    }),
+  );
 
   it.effect("keeps every runtime dependency of an external package external too", () =>
     Effect.gen(function* () {
