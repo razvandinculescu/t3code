@@ -43,7 +43,10 @@ it("checks updates on foreground without evaluating optional native exports", as
       babel.resolve("@babel/plugin-transform-modules-commonjs"),
     ],
   })!.code!;
-  const exports = {} as Pick<typeof import("./app-updates"), "createAppUpdateForegroundRecheck">;
+  const exports = {} as Pick<
+    typeof import("./app-updates"),
+    "installAppUpdateChecks" | "runAppUpdateCheck"
+  >;
   const importFailures: unknown[] = [];
   const load = (name: string) => {
     if (name === "react-native") return native;
@@ -74,7 +77,8 @@ it("checks updates on foreground without evaluating optional native exports", as
     fetchUpdateAsync: vi.fn(async () => ({ isNew: false, isRollBackToEmbedded: false })),
     reloadAsync: vi.fn(async () => {}),
   };
-  exports.createAppUpdateForegroundRecheck(client)();
+  const dispose = exports.installAppUpdateChecks(client);
+  await exports.runAppUpdateCheck({ client });
   await vi.waitFor(() => expect(listeners.size).toBe(1));
   expect(importFailures).toEqual([]);
   expect(unavailableNativeModule).not.toHaveBeenCalled();
@@ -83,8 +87,9 @@ it("checks updates on foreground without evaluating optional native exports", as
     for (const listener of listeners) listener("background");
     clock.mockReturnValue(1_001 + 15 * 60 * 1_000);
     for (const listener of listeners) listener("active");
-    await vi.waitFor(() => expect(client.checkForUpdateAsync).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(client.checkForUpdateAsync).toHaveBeenCalledTimes(2));
   } finally {
     clock.mockRestore();
+    dispose();
   }
 });
