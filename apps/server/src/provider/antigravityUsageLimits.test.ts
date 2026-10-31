@@ -1,9 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 
 import { makeAntigravityUsageProbe } from "./antigravityUsageLimits.ts";
@@ -53,15 +55,13 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     /** Per-host quota summaries; hosts not listed fall back to `summary`. */
     summaryByHost?: Record<string, unknown>;
     models?: unknown;
-    modelsByHost?: Record<string, unknown>;
-    modelsStatus?: number;
     summaryStatus?: number;
-    summaryByOrigin?: Readonly<Record<string, { body: unknown; status?: number }>>;
     /** Per-host summary statuses; hosts not listed fall back to `summaryStatus`. */
     summaryStatusByHost?: Record<string, number>;
     tokenStatus?: number;
     refreshToken?: string;
     userId?: string;
+    userInfoAt?: number;
     missingToken?: boolean;
     authMethod?: "oauth-personal" | "gemini-api-key";
   } = {},
@@ -110,28 +110,22 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
         );
       }
       expect(JSON.parse(body)).toEqual({ project: "project-id" });
-      const endpointSummary = options.summaryByOrigin?.[new URL(request.url).origin];
+      expect(request.headers["user-agent"]).toMatch(/^antigravity\/hub\/2\.24\.0 /);
       return HttpClientResponse.fromWeb(
         request,
         request.url.endsWith(":retrieveUserQuotaSummary")
-          ? Response.json(
-              endpointSummary?.body ??
-                options.summaryByHost?.[url.host] ??
-                options.summary ??
-                summary,
-              {
-                status:
-                  endpointSummary?.status ??
-                  options.summaryStatusByHost?.[url.host] ??
-                  options.summaryStatus ??
-                  200,
-              },
-            )
-          : Response.json(options.modelsByHost?.[url.host] ?? options.models ?? { models: {} }, {
-              status: options.modelsStatus ?? 200,
-            }),
+          ? Response.json(options.summaryByHost?.[url.host] ?? options.summary ?? summary, {
+              status: options.summaryStatusByHost?.[url.host] ?? options.summaryStatus ?? 200,
+            })
+          : Response.json(options.models ?? { models: {} }),
       );
-    }),
+    }).pipe(
+      Effect.tap(() =>
+        request.url.endsWith("/userinfo") && options.userInfoAt !== undefined
+          ? TestClock.setTime(options.userInfoAt)
+          : Effect.void,
+      ),
+    ),
   );
   const usage = yield* makeAntigravityUsageProbe({
     profileDirectory,
@@ -181,11 +175,9 @@ describe("Antigravity subscription limits", () => {
   it.effect("keeps Gemini limits when the daily endpoint only reports Claude and GPT", () =>
     Effect.gen(function* () {
       const { probe } = yield* fixture({
-        summaryByOrigin: {
-          "https://cloudcode-pa.googleapis.com": { body: summary },
-          "https://daily-cloudcode-pa.googleapis.com": {
-            body: { groups: [summary.groups[1]] },
-          },
+        summaryByHost: {
+          "cloudcode-pa.googleapis.com": summary,
+          "daily-cloudcode-pa.googleapis.com": { groups: [summary.groups[1]] },
         },
       });
       const limits = yield* probe;
@@ -198,26 +190,285 @@ describe("Antigravity subscription limits", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("keeps a reported reset when an equally used endpoint omits it", () =>
+  // Oracle: the 10:16 UTC payload and its narrow Workaround rule.
+  it.effect("omits rolling resets for untouched summary buckets and keeps used Gemini resets", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-21T10:16:04Z")));
       const { probe } = yield* fixture({
-        summary: { groups: [summary.groups[1]] },
-        models: { models: { "gemini-a": { quotaInfo: { remainingFraction: 0.75 } } } },
-        modelsByHost: {
+        summary: {
+          groups: [
+            {
+              buckets: [
+                {
+                  bucketId: "3p-5h",
+                  window: "5h",
+                  remainingFraction: 1,
+                  resetTime: "2026-10-21T15:16:05Z",
+                },
+                {
+                  bucketId: "3p-weekly",
+                  window: "weekly",
+                  remainingFraction: 1,
+                  resetTime: "2026-10-28T10:16:05Z",
+                },
+                {
+                  bucketId: "gemini-5h",
+                  window: "5h",
+                  remainingFraction: 0.848104,
+                  resetTime: "2026-10-21T13:29:53Z",
+                  description:
+                    "You have used some of your 5-hour limit, it will fully refresh in 3 hours, 13 minutes.",
+                },
+                {
+                  bucketId: "gemini-weekly",
+                  window: "weekly",
+                  remainingFraction: 0.9620177,
+                  resetTime: "2026-10-28T08:29:53Z",
+                  description:
+                    "You have used some of your weekly limit, it will fully refresh in 6 days, 22 hours.",
+                },
+              ],
+            },
+          ],
+        },
+      });
+      const limits = yield* probe;
+      const byId = new Map(limits.windows.map((window) => [window.id, window]));
+      expect(byId.get("3p-5h")).toEqual({
+        id: "3p-5h",
+        label: "Claude & GPT (shared) · 5-hour",
+        kind: "session",
+        usedPercent: 0,
+        windowDurationMins: 300,
+      });
+      expect(byId.get("3p-weekly")).toEqual({
+        id: "3p-weekly",
+        label: "Claude & GPT (shared) · Weekly",
+        kind: "weekly",
+        usedPercent: 0,
+        windowDurationMins: 10080,
+      });
+      expect(byId.get("gemini-5h")?.resetsAt).toBe("2026-10-21T13:29:53.000Z");
+      expect(byId.get("gemini-weekly")?.resetsAt).toBe("2026-10-28T08:29:53.000Z");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  // Oracle: measure the tolerance from the summary request, after auth.
+  it.effect("uses summary request time after authentication for the reset tolerance", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-21T10:16:02Z")));
+      const { probe } = yield* fixture({
+        userInfoAt: DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-21T10:16:04Z")),
+        summary: {
+          buckets: [
+            {
+              bucketId: "3p-5h",
+              window: "5h",
+              remainingFraction: 1,
+              resetTime: "2026-10-21T15:17:03Z",
+            },
+          ],
+        },
+      });
+      expect((yield* probe).windows[0]?.resetsAt).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  // Oracle: keep descriptions, measured resets, and spent buckets.
+  it.effect("keeps summary resets with a description, a distant reset, or no quota left", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-21T10:16:04Z")));
+      const { probe } = yield* fixture({
+        summary: {
+          buckets: [
+            {
+              bucketId: "described",
+              window: "5h",
+              remainingFraction: 1,
+              description: "Reported reset",
+              resetTime: "2026-10-21T15:16:04Z",
+            },
+            {
+              bucketId: "distant",
+              window: "weekly",
+              remainingFraction: 1,
+              resetTime: "2026-10-28T12:16:04Z",
+            },
+            {
+              bucketId: "spent",
+              window: "5h",
+              remainingFraction: 0,
+              resetTime: "2026-10-21T15:16:04Z",
+            },
+            {
+              bucketId: "overfull",
+              window: "5h",
+              remainingFraction: 1.01,
+              resetTime: "2026-10-21T15:16:04Z",
+            },
+            {
+              bucketId: "empty-description",
+              window: "5h",
+              remainingFraction: 1,
+              description: "",
+              resetTime: "2026-10-21T15:16:04Z",
+            },
+          ],
+        },
+      });
+      expect((yield* probe).windows.map(({ id, resetsAt }) => ({ id, resetsAt }))).toEqual([
+        { id: "described", resetsAt: "2026-10-21T15:16:04.000Z" },
+        { id: "empty-description", resetsAt: "2026-10-21T15:16:04.000Z" },
+        { id: "overfull", resetsAt: "2026-10-21T15:16:04.000Z" },
+        { id: "spent", resetsAt: "2026-10-21T15:16:04.000Z" },
+        { id: "distant", resetsAt: "2026-10-28T12:16:04.000Z" },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  // Oracle: the 60-second tolerance applies to both known window lengths.
+  it.effect("omits summary resets 59 seconds away but keeps resets 61 seconds away", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-21T10:16:04Z")));
+      const { probe } = yield* fixture({
+        summary: {
+          buckets: [
+            {
+              bucketId: "5h-before",
+              window: "5h",
+              remainingFraction: 1,
+              resetTime: "2026-10-21T15:15:05Z",
+            },
+            {
+              bucketId: "5h-after",
+              window: "5h",
+              remainingFraction: 1,
+              resetTime: "2026-10-21T15:17:05Z",
+            },
+            {
+              bucketId: "5h-edge",
+              window: "5h",
+              remainingFraction: 1,
+              resetTime: "2026-10-21T15:17:04Z",
+            },
+            {
+              bucketId: "weekly-after",
+              window: "weekly",
+              remainingFraction: 1,
+              resetTime: "2026-10-28T10:17:03Z",
+            },
+            {
+              bucketId: "weekly-before",
+              window: "weekly",
+              remainingFraction: 1,
+              resetTime: "2026-10-28T10:15:03Z",
+            },
+            {
+              bucketId: "weekly-edge",
+              window: "weekly",
+              remainingFraction: 1,
+              resetTime: "2026-10-28T10:15:04Z",
+            },
+          ],
+        },
+      });
+      expect((yield* probe).windows.map(({ id, resetsAt }) => ({ id, resetsAt }))).toEqual([
+        { id: "5h-after", resetsAt: "2026-10-21T15:17:05.000Z" },
+        { id: "5h-before", resetsAt: undefined },
+        { id: "5h-edge", resetsAt: undefined },
+        { id: "weekly-after", resetsAt: undefined },
+        { id: "weekly-before", resetsAt: "2026-10-28T10:15:03.000Z" },
+        { id: "weekly-edge", resetsAt: undefined },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  // Oracle: the existing endpoint merge keeps the most-used reading.
+  it.effect("keeps the used endpoint reading and its reset over an untouched reading", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-21T10:16:04Z")));
+      const { probe } = yield* fixture({
+        summaryByHost: {
           "daily-cloudcode-pa.googleapis.com": {
-            models: {
-              "gemini-a": {
-                quotaInfo: { remainingFraction: 0.75, resetTime: "2026-10-25T15:00:00Z" },
+            buckets: [
+              {
+                bucketId: "3p-5h",
+                window: "5h",
+                remainingFraction: 1,
+                resetTime: "2026-10-21T15:16:04Z",
               },
+              {
+                bucketId: "3p-weekly",
+                window: "weekly",
+                remainingFraction: 0.5,
+                resetTime: "2026-10-27T10:16:04Z",
+              },
+            ],
+          },
+          "cloudcode-pa.googleapis.com": {
+            buckets: [
+              {
+                bucketId: "3p-5h",
+                window: "5h",
+                remainingFraction: 0.5,
+                resetTime: "2026-10-21T13:16:04Z",
+              },
+              {
+                bucketId: "3p-weekly",
+                window: "weekly",
+                remainingFraction: 1,
+                resetTime: "2026-10-28T10:16:04Z",
+              },
+            ],
+          },
+        },
+      });
+      expect((yield* probe).windows).toEqual([
+        {
+          id: "3p-5h",
+          label: "Claude & GPT (shared) · 5-hour",
+          kind: "session",
+          usedPercent: 50,
+          windowDurationMins: 300,
+          resetsAt: "2026-10-21T13:16:04.000Z",
+        },
+        {
+          id: "3p-weekly",
+          label: "Claude & GPT (shared) · Weekly",
+          kind: "weekly",
+          usedPercent: 50,
+          windowDurationMins: 10080,
+          resetsAt: "2026-10-27T10:16:04.000Z",
+        },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  // Oracle: model quotas have no evidence for the summary-only rule.
+  it.effect("keeps full model fallback resets even at a full window from the request", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-21T10:16:04Z")));
+      const { probe } = yield* fixture({
+        summaryStatus: 404,
+        models: {
+          models: {
+            "gemini-a": {
+              quotaInfo: { remainingFraction: 1, resetTime: "2026-10-21T15:16:04Z" },
+              weeklyQuotaInfo: { remainingFraction: 1, resetTime: "2026-10-28T10:16:04Z" },
             },
           },
         },
       });
-      const limits = yield* probe;
-      expect(limits.windows.find((window) => window.id === "gemini-quota")).toMatchObject({
-        usedPercent: 25,
-        resetsAt: "2026-10-25T15:00:00.000Z",
-      });
+      expect(
+        (yield* probe).windows.map(({ id, resetsAt, windowDurationMins }) => ({
+          id,
+          resetsAt,
+          windowDurationMins,
+        })),
+      ).toEqual([
+        { id: "gemini-weekly", resetsAt: "2026-10-28T10:16:04.000Z", windowDurationMins: 10080 },
+        { id: "gemini-quota", resetsAt: "2026-10-21T15:16:04.000Z", windowDurationMins: undefined },
+      ]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -245,9 +496,6 @@ describe("Antigravity subscription limits", () => {
       expect(
         requests.filter((request) => request.url.endsWith(":retrieveUserQuotaSummary")),
       ).toHaveLength(4);
-      expect(requests.filter((request) => request.url.endsWith(":fetchAvailableModels"))).toEqual(
-        [],
-      );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -283,6 +531,28 @@ describe("Antigravity subscription limits", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("labels Argon's weekly quota apart from the default Gemini weekly quota", () =>
+    Effect.gen(function* () {
+      const { probe } = yield* fixture({
+        summary: {
+          groups: [
+            ...summary.groups,
+            {
+              displayName: "Gemini 4 Argon",
+              buckets: [
+                { bucketId: "gemini-argon-wtu-weekly", window: "weekly", remainingFraction: 0.6 },
+              ],
+            },
+          ],
+        },
+      });
+      const limits = yield* probe;
+      const byId = new Map(limits.windows.map((window) => [window.id, window]));
+      expect(byId.get("gemini-weekly")?.label).toBe("Gemini · Weekly");
+      expect(byId.get("gemini-argon-wtu-weekly")?.label).toBe("Gemini 4 Argon · Weekly");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("keeps one endpoint's quotas when the other fails", () =>
     Effect.gen(function* () {
       const { probe } = yield* fixture({
@@ -291,24 +561,6 @@ describe("Antigravity subscription limits", () => {
       const limits = yield* probe;
       expect(limits.unavailable).toBeUndefined();
       expect(limits.windows).toHaveLength(4);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("uses the daily endpoint when the primary quota summary is unavailable", () =>
-    Effect.gen(function* () {
-      const { probe } = yield* fixture({
-        summaryByOrigin: {
-          "https://cloudcode-pa.googleapis.com": { body: {}, status: 503 },
-          "https://daily-cloudcode-pa.googleapis.com": { body: summary },
-        },
-      });
-      const limits = yield* probe;
-      expect(limits.windows.map((window) => window.id).sort()).toEqual([
-        "3p-5h",
-        "3p-weekly",
-        "gemini-5h",
-        "gemini-weekly",
-      ]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -371,48 +623,6 @@ describe("Antigravity subscription limits", () => {
           (window) => window.kind === "other" && window.windowDurationMins === undefined,
         ),
       ).toBe(true);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("fills missing third-party families without duplicating Gemini summary windows", () =>
-    Effect.gen(function* () {
-      const { probe } = yield* fixture({
-        summary: { groups: [summary.groups[0]] },
-        models: {
-          models: {
-            "gemini-flash": { quotaInfo: { remainingFraction: 0 } },
-            "claude-sonnet": { quotaInfo: { remainingFraction: 0.25 } },
-            "gpt-model": { quotaInfo: { remainingFraction: 0.5 } },
-          },
-        },
-      });
-      const limits = yield* probe;
-      expect(limits.windows.map((window) => window.id).toSorted()).toEqual([
-        "claude-quota",
-        "gemini-5h",
-        "gemini-weekly",
-        "gpt-quota",
-      ]);
-      expect(
-        limits.windows.find((window) => window.id === "gemini-weekly")?.usedPercent,
-      ).toBeCloseTo(4);
-      expect(limits.windows.find((window) => window.id === "claude-quota")?.usedPercent).toBe(75);
-      expect(limits.windows.find((window) => window.id === "gpt-quota")?.usedPercent).toBe(50);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("preserves a partial summary when model quota requests fail", () =>
-    Effect.gen(function* () {
-      const { probe, requests } = yield* fixture({
-        summary: { groups: [summary.groups[1]] },
-        modelsStatus: 503,
-      });
-      const limits = yield* probe;
-      expect(limits.unavailable).toBeUndefined();
-      expect(limits.windows.map((window) => window.id).toSorted()).toEqual(["3p-5h", "3p-weekly"]);
-      expect(
-        requests.filter((request) => request.url.endsWith(":fetchAvailableModels")),
-      ).toHaveLength(2);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

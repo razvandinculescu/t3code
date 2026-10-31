@@ -9,6 +9,7 @@ import * as Redacted from "effect/Redacted";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
 import * as GitHubCredentials from "./GitHubCredentials.ts";
+import * as GitHubAppSignIn from "./GitHubAppSignIn.ts";
 import * as GitHubRest from "./GitHubRest.ts";
 import * as GitHubSourceControlProvider from "./GitHubSourceControlProvider.ts";
 
@@ -26,6 +27,7 @@ const makeDiscovery = (credential: GitHubRest.GitHubRest["Service"]["credential"
         FileSystem.layerNoop({}),
         Path.layer,
         Layer.mock(GitHubRest.GitHubRest)({ credential }),
+        Layer.mock(GitHubAppSignIn.GitHubAppSignIn)({ enabled: false }),
         TestSourceControlHost.layer(),
       ),
     ),

@@ -13,7 +13,11 @@ import * as Option from "effect/Option";
 
 import * as ServerConfig from "../config.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
-import { detailFromCause, firstNonEmptyLine } from "@t3tools/source-control-core/server/discovery";
+import {
+  detailFromCause,
+  firstNonEmptyLine,
+  unavailableInstallHint,
+} from "@t3tools/source-control-core/server/discovery";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 
 interface DiscoveryProbe {
@@ -77,7 +81,7 @@ export const make = Effect.gen(function* () {
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
 
   const probe = Effect.fn("SourceControlDiscovery.probe")(function* <Kind extends VcsDriverKind>(
-    input: DiscoveryProbe & { readonly kind: Kind },
+    input: VcsProbe & { readonly kind: Kind },
   ): Effect.fn.Return<DiscoveryProbeResult<Kind>> {
     const executable = input.executable;
     const versionArgs = input.versionArgs;
@@ -129,16 +133,19 @@ export const make = Effect.gen(function* () {
             }) satisfies DiscoveryProbeResult<Kind>,
         ),
         Effect.catch((cause) =>
-          Effect.succeed({
-            kind: input.kind,
-            label: input.label,
-            executable,
-            implemented: input.implemented,
-            status: "missing" as const,
-            version: Option.none<string>(),
-            installHint: input.installHint,
-            detail: detailFromCause(cause),
-          } satisfies DiscoveryProbeResult<Kind>),
+          Effect.gen(function* () {
+            const installHint = yield* unavailableInstallHint(executable, input.installHint, cause);
+            return {
+              kind: input.kind,
+              label: input.label,
+              executable,
+              implemented: input.implemented,
+              status: "missing" as const,
+              version: Option.none<string>(),
+              installHint,
+              detail: detailFromCause(cause),
+            } satisfies DiscoveryProbeResult<Kind>;
+          }),
         ),
       );
   });

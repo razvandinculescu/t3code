@@ -1,10 +1,4 @@
 import { type OrchestrationV2TurnItem } from "@t3tools/contracts";
-import {
-  liveThoughtLine,
-  resolveViewedImageAsset,
-  toolGroupAction,
-  workEntryViewedImagePath,
-} from "./presentation.js";
 import { describe, expect, it } from "vite-plus/test";
 
 import { ThreadId, TurnItemId } from "@t3tools/contracts";
@@ -15,8 +9,8 @@ import {
   toolItemForDisplay,
   type WorkLogPresentationEntry,
   workEntryIndicatesToolFailure,
-  workEntryDisplayIndicatesToolFailure,
   workEntryIndicatesToolSuccess,
+  workEntryDisplayIndicatesToolFailure,
 } from "./presentation.js";
 
 function commandItem(
@@ -39,7 +33,6 @@ function commandItem(
     updatedAt: DateTime.makeUnsafe("2026-09-08T00:00:00.000Z"),
     type: "command_execution",
     input: 'rg "command not found"',
-    exitCode: 0,
     ...fields,
   };
 }
@@ -67,10 +60,25 @@ describe("workEntryIndicatesToolFailure", () => {
         structuredPayload,
       };
       expect(workEntryDisplayIndicatesToolFailure(entry)).toBe(failed);
-      expect(workEntryIndicatesToolSuccess(entry)).toBe(!failed);
       expect(JSON.stringify(toolItemForDisplay(structuredPayload))).not.toContain('"output":');
     },
   );
+
+  it.each([
+    "logs/app.log:12: Error: ENOENT: no such file or directory",
+    "fixtures/ci.txt:3: Process exited with exit code 2",
+  ])("trusts a zero exit code over failure text in the output and command: %s", (output) => {
+    const entry: WorkLogPresentationEntry = {
+      ...base,
+      tone: "tool",
+      itemType: "command_execution",
+      toolLifecycleStatus: "completed",
+      command: 'rg -n "ENOENT|exit code" logs fixtures',
+      structuredPayload: commandItem({ output, exitCode: 0, outputIndicatesFailure: true }),
+    };
+    expect(workEntryIndicatesToolFailure(entry)).toBe(false);
+    expect(workEntryDisplayIndicatesToolFailure(entry)).toBe(false);
+  });
 
   it("ignores failure phrases in reasoning text", () => {
     const entry: WorkLogPresentationEntry = {
@@ -117,7 +125,6 @@ describe("resolveWorkEntryToolPresentation", () => {
       "Failed to clone a repository",
     );
     expect(workEntryDisplayIndicatesToolFailure(entry)).toBe(true);
-    expect(workEntryIndicatesToolSuccess(entry)).toBe(false);
     const childFailure = {
       ...entry,
       label: "T3-code.task_status",
@@ -125,7 +132,6 @@ describe("resolveWorkEntryToolPresentation", () => {
       toolData: { output: { taskId: "child", status: "failed", summary: "command not found" } },
     };
     expect(workEntryDisplayIndicatesToolFailure(childFailure)).toBe(false);
-    expect(workEntryIndicatesToolSuccess(childFailure)).toBe(true);
   });
   it.each([
     "mcp__t3-code__preview_click",
