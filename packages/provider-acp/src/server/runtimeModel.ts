@@ -220,7 +220,7 @@ export type AcpPlanUpdate =
       readonly explanation?: string | null;
       readonly plan: ReadonlyArray<{
         readonly step: string;
-        readonly status: "pending" | "inProgress" | "completed";
+        readonly status: "pending" | "inProgress" | "completed" | "cancelled";
       }>;
     }
   | { readonly nativePlanId: string; readonly kind: "markdown"; readonly markdown: string }
@@ -235,11 +235,6 @@ export interface AcpPermissionRequest {
 }
 
 export type AcpParsedSessionEvent =
-  | {
-      readonly _tag: "ContextUsageUpdated";
-      readonly usedTokens: number;
-      readonly maxTokens: number;
-    }
   | {
       readonly _tag: "ModeChanged";
       readonly modeId: string;
@@ -498,10 +493,14 @@ export function parseSessionModeState(
   };
 }
 
-function normalizePlanStepStatus(raw: unknown): "pending" | "inProgress" | "completed" {
+function normalizePlanStepStatus(
+  raw: unknown,
+): "pending" | "inProgress" | "completed" | "cancelled" {
   switch (raw) {
     case "completed":
       return "completed";
+    case "cancelled":
+      return "cancelled";
     case "in_progress":
     case "inProgress":
       return "inProgress";
@@ -1358,10 +1357,6 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
   let modeId: string | undefined;
 
   switch (upd.sessionUpdate) {
-    case "usage_update": {
-      events.push({ _tag: "ContextUsageUpdated", usedTokens: upd.used, maxTokens: upd.size });
-      break;
-    }
     case "config_option_update": {
       const modes = parseSessionModeState({ configOptions: upd.configOptions });
       if (modes !== undefined) {
@@ -1558,14 +1553,17 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       }
       break;
     }
-    case "state_update": {
-      if (upd.state === "idle" && upd.usage !== undefined && upd.usage !== null) {
-        events.push({
-          _tag: "UsageUpdated",
-          usage: { usedTokens: upd.usage.totalTokens },
-          rawPayload: params,
-        });
-      }
+    case "usage_update": {
+      const currency = upd.cost?.currency.trim().slice(0, 32);
+      events.push({
+        _tag: "UsageUpdated",
+        usage: {
+          usedTokens: upd.used,
+          ...(upd.size > 0 ? { maxTokens: upd.size } : {}),
+          ...(upd.cost && currency ? { cost: { amount: upd.cost.amount, currency } } : {}),
+        },
+        rawPayload: params,
+      });
       break;
     }
     case "session_info_update": {

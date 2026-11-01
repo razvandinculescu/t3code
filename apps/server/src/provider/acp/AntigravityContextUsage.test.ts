@@ -8,7 +8,6 @@ import {
   decodeAntigravityContextUsage,
   readAntigravityContextUsage,
 } from "./AntigravityContextUsage.ts";
-import { parseSessionUpdateEvent } from "@t3tools/provider-acp/server/runtimeModel";
 
 const varint = (value: number): number[] => {
   const bytes = [];
@@ -61,15 +60,6 @@ it("rejects truncated and invalid wire data, and ignores unknown fields", () => 
   expect(
     decodeAntigravityContextUsage(new Uint8Array([...metadata(20), ...number(999, 3)]))?.usedTokens,
   ).toBe(20);
-});
-it("preserves ACP context updates including a decrease after compaction", () => {
-  for (const used of [900_000, 20_000, 0])
-    expect(
-      parseSessionUpdateEvent({
-        sessionId: "session",
-        update: { sessionUpdate: "usage_update", used, size: 1_000_000 },
-      }).events,
-    ).toEqual([{ _tag: "ContextUsageUpdated", usedTokens: used, maxTokens: 1_000_000 }]);
 });
 it.effect(
   "reads only the newest model step in this session and never creates a missing database",

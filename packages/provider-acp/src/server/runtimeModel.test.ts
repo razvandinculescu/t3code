@@ -844,7 +844,7 @@ describe("AcpRuntimeModel", () => {
     });
   });
 
-  it("preserves message identity, context usage, metadata, and non-text output", () => {
+  it("preserves message identity, usage, metadata, and non-text output", () => {
     const message = parseSessionUpdateEvent({
       sessionId: "session-1",
       update: {
@@ -882,9 +882,24 @@ describe("AcpRuntimeModel", () => {
       messageId: "message-1",
       text: "Report: Generated artifact\nfile:///workspace/report.txt",
     });
-    expect(usage.events).toEqual([
-      { _tag: "ContextUsageUpdated", usedTokens: 2_500, maxTokens: 10_000 },
-    ]);
+    expect(usage.events[0]).toMatchObject({
+      _tag: "UsageUpdated",
+      usage: {
+        usedTokens: 2_500,
+        maxTokens: 10_000,
+        cost: { amount: 0.42, currency: "USD" },
+      },
+    });
+    for (const used of [900_000, 20_000, 0]) {
+      expect(
+        parseSessionUpdateEvent({
+          sessionId: "session",
+          update: { sessionUpdate: "usage_update", used, size: 1_000_000 },
+        }).events,
+      ).toMatchObject([
+        { _tag: "UsageUpdated", usage: { usedTokens: used, maxTokens: 1_000_000 } },
+      ]);
+    }
     expect(metadata.events[0]).toMatchObject({
       _tag: "SessionInfoUpdated",
       metadata: {
@@ -1042,10 +1057,7 @@ describe("AcpRuntimeModel", () => {
         data: { rawOutput: "Retained the implementation decisions." },
       },
     });
-    expect(idle.events[0]).toMatchObject({
-      _tag: "UsageUpdated",
-      usage: { usedTokens: 420 },
-    });
+    expect(idle.events).toEqual([]);
   });
 
   it("applies ACP v2 agent-owned terminal snapshots and output chunks", () => {
