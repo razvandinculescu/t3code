@@ -67,6 +67,7 @@
         "@t3tools/web",
         "@napi-rs/keyring",
         "zod",
+        "ffi-rs",
       ],
     },
     "apps/desktop": {
