@@ -7,6 +7,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { useAtomValue } from "@effect/atom-react";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 import type { HighlightScheme } from "../../lib/highlights";
 import { highlightShellCommand } from "./shellCommandHighlight";
@@ -15,9 +16,12 @@ class CommandHighlightRequest extends Data.Class<{
   readonly code: string;
   readonly theme: HighlightScheme;
 }> {}
-class CommandHighlightError extends Data.TaggedError("CommandHighlightError")<{
-  readonly cause: unknown;
-}> {}
+class CommandHighlightError extends Schema.TaggedError<CommandHighlightError>()(
+  "CommandHighlightError",
+  {
+    cause: Schema.Unknown,
+  },
+) {}
 const shellCommandHighlightAtom = Atom.family((request: CommandHighlightRequest) =>
   Atom.make(
     Effect.tryPromise({

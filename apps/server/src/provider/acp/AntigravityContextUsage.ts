@@ -8,6 +8,11 @@ import * as Schema from "effect/Schema";
 const isSessionId = Schema.is(Schema.String.check(Schema.isUUID(4)));
 const MAX_METADATA_BYTES = 64 * 1024;
 
+class AntigravityContextReadError extends Schema.TaggedError<AntigravityContextReadError>()(
+  "AntigravityContextReadError",
+  { cause: Schema.Unknown },
+) {}
+
 /** Read protobuf wire fields without decoding prompt text or loading Google's
  * runtime. Field numbers below come from the official ACP distribution's
  * CortexStepMetadata, ModelUsageStats and ModelInfo descriptors. Unknown fields
@@ -91,22 +96,25 @@ export const readAntigravityContextUsage = Effect.fn("readAntigravityContextUsag
     "conversations",
     `${sessionId}.db`,
   );
-  return yield* Effect.try(() => {
-    const db = new NodeSqlite.DatabaseSync(filename, { readOnly: true, allowExtension: false });
-    try {
-      const rows = db
-        .prepare(
-          "SELECT CASE WHEN length(metadata) <= 65536 THEN metadata END AS metadata FROM steps ORDER BY idx DESC LIMIT 32",
-        )
-        .iterate();
-      for (const row of rows) {
-        if (!(row.metadata instanceof Uint8Array)) continue;
-        const usage = decodeAntigravityContextUsage(row.metadata);
-        if (usage) return usage;
+  return yield* Effect.try({
+    try: () => {
+      const db = new NodeSqlite.DatabaseSync(filename, { readOnly: true, allowExtension: false });
+      try {
+        const rows = db
+          .prepare(
+            "SELECT CASE WHEN length(metadata) <= 65536 THEN metadata END AS metadata FROM steps ORDER BY idx DESC LIMIT 32",
+          )
+          .iterate();
+        for (const row of rows) {
+          if (!(row.metadata instanceof Uint8Array)) continue;
+          const usage = decodeAntigravityContextUsage(row.metadata);
+          if (usage) return usage;
+        }
+        return undefined;
+      } finally {
+        db.close();
       }
-      return undefined;
-    } finally {
-      db.close();
-    }
+    },
+    catch: (cause) => new AntigravityContextReadError({ cause }),
   }).pipe(Effect.orElseSucceed(() => undefined));
 });

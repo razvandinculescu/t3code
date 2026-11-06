@@ -1,4 +1,4 @@
-import * as Data from "effect/Data";
+import * as Schema from "effect/Schema";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -9,7 +9,9 @@ import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import { waitForHttpReady } from "./httpReadiness.ts";
 
-class ReadinessError extends Data.TaggedError("ReadinessError")<{ readonly cause: unknown }> {}
+class ReadinessError extends Schema.TaggedError<ReadinessError>()("ReadinessError", {
+  cause: Schema.Unknown,
+}) {}
 
 function recordSpans(spans: Array<{ name: string; failed: boolean }>) {
   return Tracer.make({
