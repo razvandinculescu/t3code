@@ -7,7 +7,6 @@ import {
   formatResetsIn,
 } from "@t3tools/shared/usageLimits";
 import { TicketIcon } from "lucide-react";
-import type { ReactNode } from "react";
 
 import { barColor, PaceIcon } from "./UsageLimits";
 import { AccountAvatar, AccountName, PoolSegment, UsageLimitsPooled } from "./UsageLimitsPooled";
@@ -16,17 +15,14 @@ import { AccountAvatar, AccountName, PoolSegment, UsageLimitsPooled } from "./Us
 export function UsageLimitsAccounts({
   presentations,
   now,
-  cursorPrompt,
 }: {
   readonly presentations: Parameters<typeof collectLimitAccounts>[0];
   readonly now: number;
-  readonly cursorPrompt?: ReactNode;
 }) {
   return (
     <UsageLimitsPooled
       presentations={presentations}
       now={now}
-      cursorPrompt={cursorPrompt}
       renderAccounts={(accounts) => <AccountCards accounts={accounts} now={now} />}
     />
   );
