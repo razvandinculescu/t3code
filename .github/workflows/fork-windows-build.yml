@@ -63,6 +63,20 @@ jobs:
           (cd ios && pod install)
           test -d ios/T3CodeFork.xcworkspace
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $T3_IOS_BUILD_NUMBER" ios/T3CodeFork/Info.plist
+      - name: Normalize and validate generated app images
+        run: |
+          set -euo pipefail
+          catalog=apps/mobile/ios/T3CodeFork/Images.xcassets
+          for image in "$catalog"/SplashScreenLogo.imageset/*.png; do
+            sips -s format png "$image" --out "${image}.normalized.png"
+            mv "${image}.normalized.png" "$image"
+          done
+          mkdir -p "$RUNNER_TEMP/t3-asset-preflight"
+          xcrun actool "$catalog" apps/mobile/ios/T3CodeFork/app-icon.icon \
+            --compile "$RUNNER_TEMP/t3-asset-preflight" --platform iphoneos \
+            --minimum-deployment-target 18.0 --target-device iphone --target-device ipad \
+            --app-icon app-icon --output-partial-info-plist "$RUNNER_TEMP/t3-asset-preflight/info.plist" \
+            --output-format human-readable-text
       - name: Verify native module discovery before compilation
         run: vp run check:mobile:modules
       - name: Build iOS app
