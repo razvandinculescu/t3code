@@ -8861,15 +8861,25 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect.each([
     { outcome: "result", turnStatus: "completed", itemStatus: "failed" },
     { outcome: "interrupt", turnStatus: "interrupted", itemStatus: "interrupted" },
+    { outcome: "interrupt_aborted", turnStatus: "interrupted", itemStatus: "interrupted" },
     { outcome: "query_exit", turnStatus: "failed", itemStatus: "failed" },
   ] as const)(
     "settles unfinished compaction before the $outcome terminal receipt",
     ({ outcome, turnStatus, itemStatus }) =>
       Effect.gen(function* () {
         const stopRequested = yield* Deferred.make<void>();
+        const interruptSent = yield* Deferred.make<void>();
+        const abortReported = yield* Deferred.make<void>();
         const harness = yield* makeWakeHarnessWithOptions({
           interrupt: Deferred.succeed(stopRequested, undefined),
           close: (sdkMessages) => Queue.shutdown(sdkMessages),
+          ...(outcome === "interrupt_aborted"
+            ? {
+                interrupt: Deferred.succeed(interruptSent, undefined).pipe(
+                  Effect.andThen(Deferred.await(abortReported)),
+                ),
+              }
+            : {}),
         });
         const attemptId = RunAttemptId.make(`claude-compact-${outcome}`);
         yield* harness.runtime.startTurn(
@@ -8893,9 +8903,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         if (outcome === "query_exit") {
           yield* Queue.shutdown(harness.sdkMessages);
-        } else if (outcome === "interrupt") {
+        } else if (outcome === "interrupt" || outcome === "interrupt_aborted") {
           const idAllocator = yield* IdAllocator.IdAllocatorV2;
-          const interrupted = yield* harness.runtime
+          const interrupting = yield* harness.runtime
             .interruptTurn({
               providerThread: harness.providerThread,
               providerTurnId: idAllocator.derive.providerTurn({
@@ -8904,15 +8914,32 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               }),
             })
             .pipe(Effect.forkScoped);
-          yield* Deferred.await(stopRequested);
+          if (outcome === "interrupt_aborted") {
+            // The CLI reports the aborted compaction as failed.
+            yield* Deferred.await(interruptSent);
+            yield* harness.offerAndWait(
+              claudeSdkFrame({
+                type: "system",
+                subtype: "status",
+                status: null,
+                compact_result: "failed",
+                compact_error: "API Error: Request was aborted.",
+                uuid: "00000000-0000-4000-8000-000000000223",
+                session_id: WAKE_NATIVE_SESSION,
+              }),
+            );
+            yield* Deferred.succeed(abortReported, undefined);
+          } else {
+            yield* Deferred.await(stopRequested);
+          }
           yield* harness.offerAndWait(
             makeResultFrame({
-              uuid: "00000000-0000-4000-8000-000000000223",
+              uuid: "00000000-0000-4000-8000-000000000224",
               result: "",
               terminalReason: "aborted_streaming",
             }),
           );
-          yield* Fiber.join(interrupted);
+          yield* Fiber.join(interrupting);
         } else {
           yield* Queue.offer(
             harness.sdkMessages,
@@ -8933,6 +8960,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const [running, settled] = updates;
         assert.equal(running?.status, "running");
         assert.equal(settled?.status, itemStatus);
+        assert.equal(
+          settled?.title,
+          itemStatus === "failed" ? "Context compaction failed" : "Context compaction stopped",
+        );
+        if (outcome === "interrupt_aborted") assert.isUndefined(settled?.summary);
         assert.equal(settled?.id, running?.id);
         assert.equal(settled?.ordinal, running?.ordinal);
         assert.deepEqual(settled?.startedAt, running?.startedAt);
