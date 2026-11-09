@@ -37,6 +37,12 @@ jobs:
             args:
               - --filter=@t3tools/mobile...
               - --filter=@t3tools/scripts...
+      - name: Restore enriched Markdown native assets
+        working-directory: apps/mobile
+        run: |
+          set -euo pipefail
+          node node_modules/react-native-enriched-markdown/postinstall.mjs
+          test -f node_modules/react-native-enriched-markdown/ios/vendor/.stamp
       - name: Test mobile startup and update lifecycle
         working-directory: apps/mobile
         run: vp test run src/features/updates/app-updates.native-import.test.ts src/features/updates/app-updates.test.ts src/lib/runtimePolyfills.test.ts
