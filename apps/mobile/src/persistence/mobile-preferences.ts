@@ -116,7 +116,6 @@ export interface Preferences {
   readonly microphones?: ReadonlyArray<MicrophoneEntry>;
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
-  readonly planModeEnabled?: boolean;
   /** Keep reasoning rows visible and open instead of folding them into settled turns. */
   readonly reasoningExpandedByDefault?: boolean;
   /** Keep settled work logs, their groups, and row details open. */
@@ -205,7 +204,6 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     microphones?: ReadonlyArray<MicrophoneEntry>;
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
-    planModeEnabled?: boolean;
     reasoningExpandedByDefault?: boolean;
     workLogExpandedByDefault?: boolean;
     toolCallVisibility?: ToolCallVisibility;
@@ -331,9 +329,6 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     parsed.projectGroupingMode === "separate"
   ) {
     preferences.projectGroupingMode = parsed.projectGroupingMode;
-  }
-  if (typeof parsed.planModeEnabled === "boolean") {
-    preferences.planModeEnabled = parsed.planModeEnabled;
   }
   if (typeof parsed.reasoningExpandedByDefault === "boolean") {
     preferences.reasoningExpandedByDefault = parsed.reasoningExpandedByDefault;

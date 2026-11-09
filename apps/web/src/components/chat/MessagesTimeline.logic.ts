@@ -676,11 +676,13 @@ export function resolveTimelineRowItemType(
   let length: number;
   let kind: string = row.kind;
   switch (row.kind) {
-    case "message":
+    case "message": {
       kind = `message:${row.message.role}`;
       length = row.message.text.length + (row.message.attachments?.length ?? 0) * 120;
-      // Long replies must not inflate the average height of shorter unmeasured replies.
-      return `${kind}:${Math.max(0, Math.floor(Math.log2(length / 1_000)))}`;
+      // Long replies vary too much in height to share a size average.
+      const lengthBucket = Math.max(0, Math.floor(Math.log2(length / 1_000)));
+      return lengthBucket < 2 ? `${kind}:${lengthBucket}` : `message:${row.message.id}`;
+    }
     case "work":
       length = row.groupedEntries.reduce((sum, entry) => sum + entryLength(entry), 0);
       break;
