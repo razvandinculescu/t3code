@@ -12,8 +12,8 @@ import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
-import * as NodeModule from "node:module";
+import { HttpClient, HttpClientRequest } from "effect/http";
+import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { parseGitRemoteHost } from "@t3tools/source-control-core/shared/definition";
@@ -29,7 +29,6 @@ const MISSING_TOKEN_TTL_MS = 10_000;
 const SESSION_TTL_MS = 5 * 60_000;
 const MAX_OUTPUT_BYTES = 8_000_000;
 const API_BASE_URL = "https://api.cursor.com";
-const requireUndici = NodeModule.createRequire(import.meta.url);
 
 export const ORIGIN_COMMAND = "origin";
 
@@ -489,36 +488,9 @@ const make = Effect.gen(function* () {
 
 /**
  * Origin answers from a few hundred milliseconds away, so a new TLS connection doubles a request.
- * Undici's default drops an idle connection after four seconds, which a person reading a pull
- * request always outlasts; Origin keeps one open for minutes, and HTTP/2 carries a detail's
- * parallel reads on it at once.
+ * A keep-alive agent holds idle connections until Origin closes them. Undici would add HTTP/2, but
+ * the single-executable CLI cannot resolve its static import.
  */
-const httpClientLayer = FetchHttpClient.layer.pipe(
-  Layer.provide(
-    Layer.effect(FetchHttpClient.Fetch)(
-      Effect.gen(function* () {
-        // SEA resolves file-backed packages through require, including transitive HTTP clients.
-        const undici = requireUndici("undici") as typeof import("@effect/platform-node/Undici");
-        const agent = yield* Effect.acquireRelease(
-          Effect.sync(
-            () =>
-              new undici.Agent({
-                allowH2: true,
-                keepAliveTimeout: 300_000,
-                keepAliveMaxTimeout: 300_000,
-              }),
-          ),
-          (agent) => Effect.promise(() => agent.destroy()),
-        );
-        const fetch = (
-          input: Parameters<typeof undici.fetch>[0],
-          init?: Parameters<typeof undici.fetch>[1],
-        ) => undici.fetch(input, { ...init, dispatcher: agent });
-        // Undici's WHATWG types omit the iterator helpers in newer DOM declarations.
-        return fetch as unknown as typeof globalThis.fetch;
-      }),
-    ),
-  ),
-);
+const httpClientLayer = NodeHttpClient.layerNodeHttpOptions({ keepAlive: true });
 
 export const layer = Layer.effect(OriginCli, make).pipe(Layer.provide(httpClientLayer));
