@@ -46,6 +46,13 @@ jobs:
       - name: Test mobile startup and update lifecycle
         working-directory: apps/mobile
         run: vp test run src/features/updates/app-updates.native-import.test.ts src/features/updates/app-updates.test.ts src/lib/runtimePolyfills.test.ts
+      - name: Validate production iOS bundle
+        working-directory: apps/mobile
+        env:
+          APP_VARIANT: production
+          T3CODE_IOS_PERSONAL_TEAM: '1'
+          T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID: ro.razvandinculescu.t3code
+        run: vp exec expo export --platform ios --no-bytecode --max-workers 3 --output-dir "$RUNNER_TEMP/t3-ios-bundle-check"
       - name: Generate native iOS project
         env:
           T3_IOS_BUILD_NUMBER: ${{ inputs.build-number }}
