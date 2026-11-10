@@ -16,7 +16,7 @@ export interface EmbeddedScript {
   readonly ends: ReadonlyArray<number>;
 }
 
-export { withEmbeddedScripts, type CommandSyntaxToken as SyntaxToken } from "./commandTokens.js";
+export { withEmbeddedScripts, type CommandSyntaxToken as SyntaxToken } from "./commandTokens.ts";
 
 interface MappedText {
   readonly text: string;
