@@ -4,9 +4,10 @@ import { pierreDark, pierreLight } from "@pierre/highlights/themes";
 
 import { highlightCode } from "../../lib/highlights";
 
-vi.mock("expo", async () => {
+vi.mock("react-native-nitro-modules", async () => {
   const { createWasmHighlightsModule } = await import("../../lib/highlights.testing");
-  return { requireOptionalNativeModule: () => createWasmHighlightsModule() };
+  const highlights = createWasmHighlightsModule();
+  return { NitroModules: { hasHybridObject: () => true, createHybridObject: () => highlights } };
 });
 import { highlightShellCommand } from "./shellCommandHighlight";
 
