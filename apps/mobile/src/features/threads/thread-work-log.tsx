@@ -39,6 +39,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Text as RNText,
   useAnimatedValue,
   View,
 } from "react-native";
@@ -57,6 +58,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
 import { isJavaScriptReplTool } from "@t3tools/shared/toolActivity";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
+import type { HighlightedLines } from "../../lib/highlights";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { T3Wordmark } from "../../components/T3Wordmark";
@@ -374,7 +376,7 @@ export function ShimmeringWorkContent(props: {
 function workRowSymbolName(icon: ThreadFeedActivity["icon"]): WorkContentIcon {
   switch (icon) {
     case "agent":
-      return { ios: "sparkles", android: "auto_awesome" };
+      return "robot";
     case "alert":
       return { ios: "exclamationmark.triangle", android: "error" };
     case "browser":
@@ -776,6 +778,16 @@ function ToolCodeText({
   readonly theme: "light" | "dark";
 }) {
   const lines = useMarkdownCodeHighlight({ code, language, theme, enabled: true });
+  return <HighlightedCodeText code={code} lines={lines} />;
+}
+
+function HighlightedCodeText({
+  code,
+  lines,
+}: {
+  readonly code: string;
+  readonly lines: HighlightedLines | null;
+}) {
   let offset = 0;
   const highlighted = lines?.flatMap((line, lineIndex) => {
     const separator = lineIndex > 0 ? "\n" : "";
@@ -785,10 +797,11 @@ function ToolCodeText({
       ...line.map((token) => {
         const start = offset;
         offset += token.content.length;
+        // Plain RN Text inherits the mono font; AppText would reset it to sans.
         return (
-          <Text key={start} style={token.color ? { color: token.color } : undefined}>
+          <RNText key={start} style={token.color ? { color: token.color } : undefined}>
             {token.content}
-          </Text>
+          </RNText>
         );
       }),
     ];
@@ -1505,7 +1518,7 @@ function toolGroupSummarySymbolName(kind: ToolGroupSummaryKind): AppSymbolName {
     case "reasoning":
       return { ios: "brain", android: "psychology" };
     case "agent-tool":
-      return { ios: "sparkles", android: "auto_awesome" };
+      return "robot";
     case "tone-tool":
       return { ios: "bolt", android: "bolt" };
     case "dynamic-tool":

@@ -1,13 +1,12 @@
 import { use, type CSSProperties } from "react";
+
 import {
   withEmbeddedScripts,
-  type CommandSyntaxToken as SyntaxToken,
-} from "@t3tools/client-runtime/work-log/command-tokens";
-
-export { withEmbeddedScripts } from "@t3tools/client-runtime/work-log/command-tokens";
+  type EmbeddedScript,
+  type SyntaxToken,
+} from "@t3tools/client-runtime/work-log/embedded-scripts";
 
 import { resolveDiffThemeName } from "../../lib/diffRendering";
-import type { EmbeddedScript } from "../../lib/embeddedScripts";
 import { getSyntaxHighlighterPromise } from "../../lib/syntaxHighlighting";
 
 const NO_EMBEDDED_SCRIPTS: ReadonlyArray<EmbeddedScript> = [];
@@ -77,11 +76,7 @@ export function HighlightedTokens({
   );
 }
 
-/**
- * Keys each line by its start offset, which stays unique when several lines
- * are empty, and pairs it with the line ending `code` has after it. Shiki drops
- * `\n` and `\r\n` from tokens alike, so CRLF has to come back from the source.
- */
+/** Restore CRLF from source; Shiki strips both line-ending forms. */
 export function keyedLines<Token extends SyntaxToken>(
   code: string,
   lines: ReadonlyArray<ReadonlyArray<Token>>,
