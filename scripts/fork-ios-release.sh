@@ -13,13 +13,21 @@ usb_udid=${4:-}
 for required in gh jq git t3-apple-release; do command -v "$required" >/dev/null; done
 t3-apple-release doctor
 repo=razvandinculescu/t3code
-repo_root=$(git -C "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" rev-parse --show-toplevel)
+repo_root=${T3CODE_REPO_ROOT:-$(git -C "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" rev-parse --show-toplevel 2>/dev/null || printf '%s/t3code\n' "$HOME")}
 workflow=fork-windows-build.yml
 branch=build/ios-native
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 
-# Keep the existing dispatch lane while taking its recipe from the exact source being released.
+if [[ -n ${T3_IOS_RELEASE_RUN_ID:-} ]]; then
+  run_id=$T3_IOS_RELEASE_RUN_ID
+  [[ "$run_id" =~ ^[0-9]+$ ]] || exit 2
+  run_head=$(gh run view "$run_id" -R "$repo" --json headSha --jq .headSha)
+  git -C "$repo_root" fetch --quiet origin "$run_head"
+  [[ $(git -C "$repo_root" rev-parse "$run_head^1") == "$source_sha" ]] || { printf 'The selected run belongs to another source commit.\n' >&2; exit 1; }
+  printf 'Resuming GitHub run %s; no new build was dispatched.\n' "$run_id"
+else
+  # Keep the existing dispatch lane while taking its recipe from the exact source being released.
 git -C "$repo_root" show "$source_sha:.github/workflows/fork-ios-build.yml" > "$work/workflow.yml"
 git -C "$repo_root" fetch --quiet origin "refs/heads/$branch:refs/remotes/origin/$branch"
 previous_head=$(git -C "$repo_root" rev-parse "refs/remotes/origin/$branch")
@@ -30,18 +38,18 @@ tree=$(GIT_INDEX_FILE="$work/index" git -C "$repo_root" write-tree)
 commit=$(git -C "$repo_root" commit-tree "$tree" -p "$source_sha" -p "$previous_head" -m "build: iOS release pipeline for ${source_sha:0:10}")
 git -C "$repo_root" push origin "$commit:refs/heads/$branch"
 
-run_name="iOS $source_sha ($build_number)"
 previous_id=$(gh run list -R "$repo" --workflow "$workflow" --branch "$branch" --limit 30 --json databaseId | jq '[.[].databaseId] | max // 0')
 gh workflow run "$workflow" -R "$repo" --ref "$branch" -f "source-ref=$source_sha" -f "build-number=$build_number"
 run_id=
 for attempt in {1..30}; do
-  matches=$(gh run list -R "$repo" --workflow "$workflow" --branch "$branch" --limit 30 --json databaseId,displayTitle | jq --arg title "$run_name" --argjson previous "$previous_id" '[.[] | select(.displayTitle == $title and .databaseId > $previous)]')
+  matches=$(gh run list -R "$repo" --workflow "$workflow" --branch "$branch" --limit 30 --json databaseId,headSha | jq --arg sha "$commit" --argjson previous "$previous_id" '[.[] | select(.headSha == $sha and .databaseId > $previous)]')
   count=$(jq length <<<"$matches")
   if (( count > 1 )); then printf 'Multiple matching builds; no second dispatch was made.\n' >&2; exit 1; fi
   if (( count == 1 )); then run_id=$(jq -r '.[0].databaseId' <<<"$matches"); break; fi
   sleep 2
 done
 [[ -n "$run_id" ]] || { printf 'Dispatched run is not visible yet; no duplicate was launched.\n' >&2; exit 1; }
+fi
 printf 'Building source %s in GitHub run %s\n' "$source_sha" "$run_id"
 while true; do
   artifact=$(gh api "repos/$repo/actions/runs/$run_id/artifacts" --jq '.artifacts[] | select(.name == "t3code-ios-unsigned" and .expired == false) | .id')
@@ -52,7 +60,8 @@ while true; do
     printf 'Run completed without the release artifact.\n' >&2
     exit 1
   fi
-  jq -r '.jobs[].steps[] | select(.status == "in_progress") | "Waiting for artifact: " + .name' <<<"$status"
+  active_step=$(jq -r '[.jobs[].steps[] | select(.status == "in_progress") | .name] | join(", ")' <<<"$status")
+  printf 'Waiting for artifact: %s\n' "${active_step:-$(jq -r .status <<<"$status")}"
   sleep 20
 done
 gh run download "$run_id" -R "$repo" -n t3code-ios-unsigned -D "$work/download"
