@@ -76,7 +76,8 @@ jobs:
           test -f node_modules/react-native-enriched-markdown/ios/vendor/.stamp
       - name: Test mobile startup and release validation
         run: |
-          vp test run scripts/fork-ios-build.test.ts apps/mobile/src/features/updates/app-updates.native-import.test.ts apps/mobile/src/features/updates/app-updates.test.ts apps/mobile/src/lib/runtimePolyfills.test.ts
+          (cd scripts && vp test run --config ../vite.config.ts fork-ios-build.test.ts)
+          (cd apps/mobile && vp test run src/features/updates/app-updates.native-import.test.ts src/features/updates/app-updates.test.ts src/lib/runtimePolyfills.test.ts)
       - name: Compute production native fingerprint
         id: fingerprint
         working-directory: apps/mobile
