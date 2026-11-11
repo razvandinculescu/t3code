@@ -112,6 +112,7 @@ jobs:
           key: fork-ios-native-${{ env.T3_IOS_CACHE_VERSION }}-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}
           restore-keys: |
             fork-ios-native-${{ env.T3_IOS_CACHE_VERSION }}-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            ${{ env.T3_IOS_CACHE_VERSION == 'v2' && format('fork-ios-native-v1-{0}-{1}-7dd61c4f0472417e41352a24fa736f325f0f47f7cc9e562b06a3359dbbe52874-', steps.toolchain.outputs.identity, steps.fingerprint.outputs.hash) || '' }}
       - name: Restore compiler cache
         id: compiler_cache
         uses: actions/cache/restore@v6
@@ -227,7 +228,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Save native project and Xcode outputs
-        if: success() && steps.project.outputs.native-cache-hit != 'true'
+        if: success() && (steps.project.outputs.native-cache-hit != 'true' || !startsWith(steps.native_cache.outputs.cache-matched-key, format('fork-ios-native-{0}-', env.T3_IOS_CACHE_VERSION)))
         uses: actions/cache/save@v6
         with:
           path: |
