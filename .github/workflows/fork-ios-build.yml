@@ -30,6 +30,8 @@ jobs:
       T3CODE_IOS_PERSONAL_TEAM: "1"
       T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID: ro.razvandinculescu.t3code
       EXPO_NO_GIT_STATUS: "1"
+      # Bump for changes to device Release build settings or the native cache layout.
+      T3_IOS_CACHE_VERSION: v2
       T3_IOS_BUILD_NUMBER: ${{ inputs.build-number }}
       USE_CCACHE: "1"
       CCACHE_MAXSIZE: 2G
@@ -61,7 +63,10 @@ jobs:
           set -euo pipefail
           [[ "$T3_IOS_BUILD_NUMBER" =~ ^[0-9]{1,18}$ ]]
           if ! command -v ccache >/dev/null; then brew install ccache; fi
-          echo "CCACHE_DIR=$RUNNER_TEMP/t3-ios-ccache" >> "$GITHUB_ENV"
+          config=$(cd apps/mobile && node -p 'require("node:path").join(require("node:path").dirname(require.resolve("react-native/package.json")), "scripts/xcode/ccache.conf")')
+          cache_dir=$(env -u CCACHE_DIR CCACHE_CONFIGPATH="$config" ccache --get-config cache_dir)
+          echo "CCACHE_DIR=$cache_dir" >> "$GITHUB_ENV"
+          printf 'React Native compiler cache: %s\n' "$cache_dir"
           ccache --version
           xcodebuild -version
           sysctl -n hw.ncpu hw.memsize
@@ -104,18 +109,33 @@ jobs:
           path: |
             apps/mobile/ios
             ${{ runner.temp }}/t3-ios-build
-          key: fork-ios-native-v1-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-${{ hashFiles('.github/workflows/fork-ios-build.yml', 'scripts/fork-ios-build.ts', 'pnpm-lock.yaml') }}-${{ github.run_id }}
+          key: fork-ios-native-${{ env.T3_IOS_CACHE_VERSION }}-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}
           restore-keys: |
-            fork-ios-native-v1-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-${{ hashFiles('.github/workflows/fork-ios-build.yml', 'scripts/fork-ios-build.ts', 'pnpm-lock.yaml') }}-
+            fork-ios-native-${{ env.T3_IOS_CACHE_VERSION }}-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-${{ hashFiles('pnpm-lock.yaml') }}-
       - name: Restore compiler cache
         id: compiler_cache
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: fork-ios-ccache-v1-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-${{ github.run_id }}
+          key: fork-ios-ccache-${{ env.T3_IOS_CACHE_VERSION }}-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-${{ github.run_id }}
           restore-keys: |
-            fork-ios-ccache-v1-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-
-            fork-ios-ccache-v1-${{ steps.toolchain.outputs.identity }}-
+            fork-ios-ccache-${{ env.T3_IOS_CACHE_VERSION }}-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-
+            fork-ios-ccache-${{ env.T3_IOS_CACHE_VERSION }}-${{ steps.toolchain.outputs.identity }}-
+      - name: Verify compiler cache storage before building
+        run: |
+          set -euo pipefail
+          wrapper=$(cd apps/mobile && node -p 'require("node:path").join(require("node:path").dirname(require.resolve("react-native/package.json")), "scripts/xcode/ccache-clang.sh")')
+          printf 'int t3_cache_probe(void) { return 17; }\n' > "$RUNNER_TEMP/t3-cache-probe.c"
+          ccache --zero-stats
+          for attempt in 1 2; do
+            env -u CCACHE_DIR -u CCACHE_MAXSIZE -u CCACHE_BASEDIR -u CCACHE_COMPILERCHECK -u CCACHE_CONFIGPATH \
+              CCACHE_BINARY="$(command -v ccache)" "$wrapper" \
+              -target arm64-apple-ios18.0 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
+              -c "$RUNNER_TEMP/t3-cache-probe.c" -o "$RUNNER_TEMP/t3-cache-probe.o"
+          done
+          ccache --show-stats
+          hits=$(ccache --print-stats | awk '$1 == "direct_cache_hit" || $1 == "preprocessed_cache_hit" { hits += $2 } END { print hits + 0 }')
+          [[ "$hits" -gt 0 ]] || { echo 'Compiler cache storage does not match the React Native wrapper.' >&2; exit 1; }
       - name: Prepare native project
         id: project
         env:
@@ -129,8 +149,10 @@ jobs:
             echo 'Preparing a clean native project; compiler cache remains available.'
             echo 'native-cache-hit=false' >> "$GITHUB_OUTPUT"
             rm -rf apps/mobile/ios "$RUNNER_TEMP/t3-ios-build"
-            (cd apps/mobile && vp exec expo prebuild --clean --platform ios --no-install && cd ios && pod install)
+            (cd apps/mobile && vp exec expo prebuild --clean --platform ios --no-install)
           fi
+          # Podspecs also regenerate native sources in the fresh node_modules tree, including SQLite.
+          (cd apps/mobile/ios && pod install)
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $T3_IOS_BUILD_NUMBER" apps/mobile/ios/T3CodeFork/Info.plist
           printf 'export NODE_BINARY=%q\n' "$(command -v node)" > apps/mobile/ios/.xcode.env.local
           ccache --zero-stats
@@ -192,6 +214,7 @@ jobs:
       - name: Report compiler cache statistics
         if: always() && steps.project.outcome == 'success'
         run: |
+          ccache --cleanup
           ccache --show-stats
           ccache --print-stats > "$RUNNER_TEMP/t3-ios-ccache-stats.txt"
           du -sh "$CCACHE_DIR" "$RUNNER_TEMP/t3-ios-build" || true
@@ -210,7 +233,7 @@ jobs:
           path: |
             apps/mobile/ios
             ${{ runner.temp }}/t3-ios-build
-          key: fork-ios-native-v1-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-${{ hashFiles('.github/workflows/fork-ios-build.yml', 'scripts/fork-ios-build.ts', 'pnpm-lock.yaml') }}-${{ github.run_id }}
+          key: fork-ios-native-${{ env.T3_IOS_CACHE_VERSION }}-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}
       - name: Save compiler cache
         if: always() && steps.native.outcome != 'skipped' && steps.project.outcome == 'success'
         uses: actions/cache/save@v6
