@@ -21,6 +21,41 @@ const javascriptOutputs = [
   "ExpoWidgets.bundle/ExpoWidgetsLayoutRegistry.json",
 ];
 
+export function writeForkIosCompilers(options: {
+  directory: string;
+  cacheBinary: string;
+  cacheDirectory: string;
+  configFile: string;
+  baseDirectory: string;
+  clang: string;
+  clangxx: string;
+}) {
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  NodeFS.mkdirSync(options.directory, { recursive: true });
+  const write = (name: string, compiler: string) => {
+    const file = NodePath.join(options.directory, name);
+    NodeFS.writeFileSync(
+      file,
+      [
+        "#!/bin/sh",
+        `export CCACHE_DIR=${quote(options.cacheDirectory)}`,
+        `export CCACHE_CONFIGPATH=${quote(options.configFile)}`,
+        `export CCACHE_BASEDIR=${quote(options.baseDirectory)}`,
+        "export CCACHE_COMPILERCHECK=content",
+        "export CCACHE_MAXSIZE=2G",
+        `exec ${quote(options.cacheBinary)} ${quote(compiler)} "$@"`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    return file;
+  };
+  return {
+    cc: write("ccache-clang", options.clang),
+    cxx: write("ccache-clang++", options.clangxx),
+  };
+}
+
 export function verifyForkIosApp(app: string, buildNumber: string, buildStartedAt: number) {
   if (!Number.isFinite(buildStartedAt) || buildStartedAt <= 0)
     throw new Error("Invalid build start timestamp");
@@ -61,8 +96,32 @@ if (import.meta.main) {
       "build-number": { type: "string" },
       "started-at": { type: "string" },
       output: { type: "string" },
+      "write-compilers": { type: "boolean" },
+      directory: { type: "string" },
+      "cache-directory": { type: "string" },
+      "config-file": { type: "string" },
     },
   });
+  if (values["write-compilers"]) {
+    if (!values.directory || !values["cache-directory"] || !values["config-file"])
+      throw new Error("Expected --directory, --cache-directory and --config-file");
+    const command = (program: string, args: string[]) =>
+      NodeChildProcess.execFileSync(program, args, { encoding: "utf8" }).trim();
+    process.stdout.write(
+      JSON.stringify(
+        writeForkIosCompilers({
+          directory: values.directory,
+          cacheDirectory: values["cache-directory"],
+          configFile: values["config-file"],
+          baseDirectory: process.cwd(),
+          cacheBinary: command("which", ["ccache"]),
+          clang: command("xcrun", ["--find", "clang"]),
+          clangxx: command("xcrun", ["--find", "clang++"]),
+        }),
+      ) + "\n",
+    );
+    process.exit(0);
+  }
   if (!values.app || !values["build-number"] || !values["started-at"] || !values.output)
     throw new Error("Expected --app, --build-number, --started-at and --output");
   const verified = verifyForkIosApp(

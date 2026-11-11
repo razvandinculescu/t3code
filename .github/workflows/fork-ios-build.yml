@@ -31,7 +31,7 @@ jobs:
       T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID: ro.razvandinculescu.t3code
       EXPO_NO_GIT_STATUS: "1"
       # Bump for changes to device Release build settings or the native cache layout.
-      T3_IOS_CACHE_VERSION: v2
+      T3_IOS_CACHE_VERSION: v3
       T3_IOS_BUILD_NUMBER: ${{ inputs.build-number }}
       USE_CCACHE: "1"
       CCACHE_MAXSIZE: 2G
@@ -67,6 +67,10 @@ jobs:
           cache_dir=$(env -u CCACHE_DIR CCACHE_CONFIGPATH="$config" ccache --get-config cache_dir)
           echo "CCACHE_DIR=$cache_dir" >> "$GITHUB_ENV"
           printf 'React Native compiler cache: %s\n' "$cache_dir"
+          node scripts/fork-ios-build.ts --write-compilers --directory "$RUNNER_TEMP/t3-ios-compilers" \
+            --cache-directory "$cache_dir" --config-file "$config" > "$RUNNER_TEMP/t3-ios-compilers.json"
+          echo "T3_IOS_CC=$(jq -r .cc "$RUNNER_TEMP/t3-ios-compilers.json")" >> "$GITHUB_ENV"
+          echo "T3_IOS_CXX=$(jq -r .cxx "$RUNNER_TEMP/t3-ios-compilers.json")" >> "$GITHUB_ENV"
           ccache --version
           xcodebuild -version
           sysctl -n hw.ncpu hw.memsize
@@ -112,7 +116,7 @@ jobs:
           key: fork-ios-native-${{ env.T3_IOS_CACHE_VERSION }}-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}
           restore-keys: |
             fork-ios-native-${{ env.T3_IOS_CACHE_VERSION }}-${{ steps.toolchain.outputs.identity }}-${{ steps.fingerprint.outputs.hash }}-${{ hashFiles('pnpm-lock.yaml') }}-
-            ${{ env.T3_IOS_CACHE_VERSION == 'v2' && format('fork-ios-native-v1-{0}-{1}-7dd61c4f0472417e41352a24fa736f325f0f47f7cc9e562b06a3359dbbe52874-', steps.toolchain.outputs.identity, steps.fingerprint.outputs.hash) || '' }}
+            ${{ env.T3_IOS_CACHE_VERSION == 'v3' && format('fork-ios-native-v2-{0}-{1}-{2}-', steps.toolchain.outputs.identity, steps.fingerprint.outputs.hash, hashFiles('pnpm-lock.yaml')) || '' }}
       - name: Restore compiler cache
         id: compiler_cache
         uses: actions/cache/restore@v6
@@ -125,12 +129,11 @@ jobs:
       - name: Verify compiler cache storage before building
         run: |
           set -euo pipefail
-          wrapper=$(cd apps/mobile && node -p 'require("node:path").join(require("node:path").dirname(require.resolve("react-native/package.json")), "scripts/xcode/ccache-clang.sh")')
           printf 'int t3_cache_probe(void) { return 17; }\n' > "$RUNNER_TEMP/t3-cache-probe.c"
           ccache --zero-stats
           for attempt in 1 2; do
-            env -u CCACHE_DIR -u CCACHE_MAXSIZE -u CCACHE_BASEDIR -u CCACHE_COMPILERCHECK -u CCACHE_CONFIGPATH \
-              CCACHE_BINARY="$(command -v ccache)" "$wrapper" \
+            env -u CCACHE_DIR -u CCACHE_MAXSIZE -u CCACHE_BASEDIR -u CCACHE_COMPILERCHECK -u CCACHE_CONFIGPATH -u CCACHE_BINARY \
+              "$T3_IOS_CC" \
               -target arm64-apple-ios18.0 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
               -c "$RUNNER_TEMP/t3-cache-probe.c" -o "$RUNNER_TEMP/t3-cache-probe.o"
           done
@@ -186,7 +189,8 @@ jobs:
           xcodebuild -workspace T3CodeFork.xcworkspace -scheme T3CodeFork \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/t3-ios-build" -jobs '${{ steps.toolchain.outputs.jobs }}' \
-            -showBuildTimingSummary CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO \
+            -showBuildTimingSummary CC="$T3_IOS_CC" CXX="$T3_IOS_CXX" \
+            CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO \
             CLANG_ENABLE_MODULE_DEBUGGING=NO DEBUG_INFORMATION_FORMAT=dwarf \
             CURRENT_PROJECT_VERSION="$T3_IOS_BUILD_NUMBER" build 2>&1 | tee "$RUNNER_TEMP/t3-ios-build.log"
       - name: Verify fresh release bundles and source provenance
