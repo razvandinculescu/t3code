@@ -65,7 +65,9 @@ function AccountCards({
                   const reset = window.resets[0];
                   const resetsIn = formatResetsIn(member.window, now);
                   const details =
-                    pool.driver === "cursor" ? cursorUsageWindowDetails(window.id) : undefined;
+                    pool.driver === "cursor"
+                      ? cursorUsageWindowDetails(window.id, pool)
+                      : undefined;
                   return (
                     <div key={`${window.kind}:${window.id}`} className="space-y-2.5 py-4">
                       <div className="flex items-baseline justify-between gap-3">

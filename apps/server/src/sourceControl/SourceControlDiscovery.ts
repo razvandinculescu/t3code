@@ -7,11 +7,14 @@ import {
   type VcsDriverKind,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ServerConfig from "../config.ts";
+import { refreshPathFromLoginShell } from "../os-jank.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import {
   detailFromCause,
@@ -79,6 +82,14 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const process = yield* VcsProcess.VcsProcess;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  // Discovery re-reads the login shell so a tool installed since launch
+  // resolves here and in every later spawn. Thread views, the palette and
+  // mobile also run discovery, so one interactive shell serves a short window.
+  const refreshPath = yield* refreshPathFromLoginShell().pipe(
+    Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    Effect.cachedWithTTL(Duration.seconds(10)),
+  );
 
   const probe = Effect.fn("SourceControlDiscovery.probe")(function* <Kind extends VcsDriverKind>(
     input: VcsProbe & { readonly kind: Kind },
@@ -151,13 +162,16 @@ export const make = Effect.gen(function* () {
   });
 
   return SourceControlDiscovery.of({
-    discover: Effect.all({
-      versionControlSystems: Effect.all(
-        VCS_PROBES.map((entry) => probe(entry)) as ReadonlyArray<Effect.Effect<VcsDiscoveryItem>>,
-        { concurrency: "unbounded" },
-      ),
-      sourceControlProviders: sourceControlProviders.discover,
-    }),
+    discover: Effect.andThen(
+      refreshPath,
+      Effect.all({
+        versionControlSystems: Effect.all(
+          VCS_PROBES.map((entry) => probe(entry)) as ReadonlyArray<Effect.Effect<VcsDiscoveryItem>>,
+          { concurrency: "unbounded" },
+        ),
+        sourceControlProviders: sourceControlProviders.discover,
+      }),
+    ),
   });
 });
 
