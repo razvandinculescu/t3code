@@ -1,6 +1,6 @@
 import { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { normalizeHostname } from "@t3tools/shared/hostClassification";
+import { isLocalLoopbackHost, normalizeHostname } from "@t3tools/shared/hostClassification";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -506,23 +506,34 @@ export const runTailscaleServe = Effect.fn("Tailscale.runServe")(function* (inpu
   readonly localPort: number;
   readonly servePort: number;
   readonly localHost?: string;
+  readonly rootHolder?: Effect.Effect<
+    "none" | "ours" | "dead" | "other" | "unreadable",
+    never,
+    ChildProcessSpawner.ChildProcessSpawner
+  >;
 }) {
+  const { rootHolder, ...route } = input;
   yield* Effect.acquireRelease(
     Effect.gen(function* () {
       let retryDelayMs = 1_000;
       while (true) {
-        const configured = yield* ensureTailscaleServe(input).pipe(
+        const holder = yield* rootHolder ?? Effect.succeed("none");
+        if (holder === "other" || holder === "unreadable") {
+          yield* Effect.sleep("30 seconds");
+          continue;
+        }
+        const configured = yield* ensureTailscaleServe(route).pipe(
           Effect.as(true),
           Effect.catch((cause) =>
             Effect.logWarning("Tailscale Serve unavailable; retrying", {
               cause,
-              ...input,
+              ...route,
               retryDelayMs,
             }).pipe(Effect.as(false)),
           ),
         );
         if (configured) {
-          yield* Effect.logInfo("Tailscale Serve configured", input);
+          yield* Effect.logInfo("Tailscale Serve configured", route);
           return;
         }
         yield* Effect.sleep(retryDelayMs);
@@ -555,19 +566,28 @@ export const runTailscaleServe = Effect.fn("Tailscale.runServe")(function* (inpu
         Effect.flatMap((ours) =>
           ours
             ? disableTailscaleServe({ servePort: input.servePort }).pipe(
-                Effect.tap(() => Effect.logInfo("Tailscale Serve disabled", input)),
+                Effect.tap(() => Effect.logInfo("Tailscale Serve disabled", route)),
               )
             : Effect.logInfo(
                 "Tailscale Serve left on; its root route is not known to be ours",
-                input,
+                route,
               ),
         ),
         Effect.catch((cause) =>
-          Effect.logWarning("Failed to disable Tailscale Serve", { cause, ...input }),
+          Effect.logWarning("Failed to disable Tailscale Serve", { cause, ...route }),
         ),
       ),
   );
-  return yield* Effect.never;
+  return yield* rootHolder
+    ? Effect.sleep("30 seconds").pipe(
+        Effect.andThen(rootHolder),
+        Effect.flatMap((holder) =>
+          holder === "none" || holder === "dead" ? ensureTailscaleServe(route) : Effect.void,
+        ),
+        Effect.catch((cause) => Effect.logWarning("Failed to repair Tailscale Serve", { cause })),
+        Effect.forever,
+      )
+    : Effect.never;
 });
 /** Removes a TCP forward on `servePort`; one port holds one forward, so nothing else goes. */
 export const disableTailscaleServeTcp = (servePort: number) =>
@@ -721,6 +741,60 @@ export const readTailscaleServeRoutesTo = (target: {
       return routes === undefined
         ? Effect.fail(new TailscaleStatusParseError({ cause: "unreadable serve status" }))
         : Effect.succeed(routes);
+    }),
+  );
+
+/** A handler at the root of a Serve port: this server's, or another with the loopback port it dials. */
+export type TailscaleServeRootHolder =
+  | { readonly ours: true }
+  | { readonly ours: false; readonly loopback?: { readonly host: string; readonly port: number } };
+
+/**
+ * What answers at the root of `servePort` outside any Tailscale Service, where
+ * `ensureTailscaleServe` publishes, or undefined when the status cannot be read.
+ */
+export const parseTailscaleServeRootHolders = (
+  rawServeStatusJson: string,
+  servePort: number,
+  target: { readonly host: string; readonly port: number },
+): ReadonlyArray<TailscaleServeRootHolder> | undefined => {
+  const status = decodeTailscaleServeStatusJson(rawServeStatusJson);
+  if (Option.isNone(status)) return undefined;
+  const config = status.value ?? undefined;
+  const tcp: ReadonlyArray<TailscaleServeRootHolder> =
+    config?.TCP?.[String(servePort)]?.TCPForward === undefined ? [] : [{ ours: false }];
+  const web = Object.entries(config?.Web ?? {}).flatMap(
+    ([hostPort, site]): ReadonlyArray<TailscaleServeRootHolder> => {
+      const root = site.Handlers?.["/"];
+      if (Number(hostPort.slice(hostPort.lastIndexOf(":") + 1)) !== servePort || root === undefined)
+        return [];
+      if (root.Proxy === undefined) return [{ ours: false }];
+      const url = expandProxy(root.Proxy);
+      if (reachesTarget(url, target) !== undefined) return [{ ours: true }];
+      const dialed = dialedHostPort(url);
+      return [
+        dialed !== undefined && isLocalLoopbackHost(dialed.host)
+          ? {
+              ours: false,
+              loopback: { host: normalizeHostname(dialed.host), port: Number(dialed.port) },
+            }
+          : { ours: false },
+      ];
+    },
+  );
+  return [...tcp, ...web];
+};
+
+export const readTailscaleServeRootHolders = (
+  servePort: number,
+  target: { readonly host: string; readonly port: number },
+) =>
+  readTailscaleOutput("serve", ["serve", "status", "--json"]).pipe(
+    Effect.flatMap((status) => {
+      const holders = parseTailscaleServeRootHolders(status, servePort, target);
+      return holders === undefined
+        ? Effect.fail(new TailscaleStatusParseError({ cause: "unreadable serve status" }))
+        : Effect.succeed(holders);
     }),
   );
 

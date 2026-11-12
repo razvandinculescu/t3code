@@ -17,6 +17,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   ensureTailscaleServe,
   parseTailscaleExitNode,
+  parseTailscaleServeRootHolders,
   parseTailscaleServeRoutesTo,
   parseTailscaleSshEnabled,
   parseTailscaleStatus,
@@ -220,6 +221,39 @@ describe("tailscale", () => {
     assert.isUndefined(parseTailscaleServeRoutesTo("not json", { host: "127.0.0.1", port: 3773 }));
   });
 
+  it("finds what holds a Serve port's root", () => {
+    const target = { host: "127.0.0.1", port: 3773 };
+    const status = JSON.stringify({
+      TCP: { "8443": { TCPForward: "127.0.0.1:22" } },
+      Web: {
+        "box.tailnet.ts.net:443": {
+          Handlers: { "/": { Proxy: "http://127.0.0.1:3773" }, "/x": { Proxy: "9000" } },
+        },
+        "old.tailnet.ts.net:443": { Handlers: { "/": { Proxy: "http://[::1]:4000" } } },
+        "box.tailnet.ts.net:10000": { Handlers: { "/": { Proxy: "http://127.0.0.1:4001" } } },
+        "box.tailnet.ts.net:10001": { Handlers: { "/": { Proxy: "http://10.0.0.5:4002" } } },
+        "box.tailnet.ts.net:10002": { Handlers: { "/": { Text: "hi" } } },
+      },
+      Services: {
+        "svc:t3": {
+          Web: { "t3.tailnet.ts.net:10000": { Handlers: { "/": { Proxy: "4003" } } } },
+        },
+      },
+    });
+    assert.deepEqual(parseTailscaleServeRootHolders(status, 443, target), [
+      { ours: true },
+      { ours: false, loopback: { host: "::1", port: 4000 } },
+    ]);
+    assert.deepEqual(parseTailscaleServeRootHolders(status, 10000, target), [
+      { ours: false, loopback: { host: "127.0.0.1", port: 4001 } },
+    ]);
+    assert.deepEqual(parseTailscaleServeRootHolders(status, 10001, target), [{ ours: false }]);
+    assert.deepEqual(parseTailscaleServeRootHolders(status, 10002, target), [{ ours: false }]);
+    assert.deepEqual(parseTailscaleServeRootHolders(status, 8443, target), [{ ours: false }]);
+    assert.deepEqual(parseTailscaleServeRootHolders("null", 443, target), []);
+    assert.isUndefined(parseTailscaleServeRootHolders("not json", 443, target));
+  });
+
   it.effect("parses status facts", () =>
     Effect.gen(function* () {
       const status = yield* parseTailscaleStatus(tailscaleStatusJson);
@@ -394,17 +428,28 @@ describe("tailscale", () => {
         assert.deepEqual(commands.at(-1), ["serve", "--https=8443", "--set-path=/", "off"]);
 
         localPort = 13774;
-        const second = yield* runTailscaleServe({ localPort: 13774, servePort: 8443 }).pipe(
-          Effect.scoped,
-          Effect.forkScoped,
-        );
+        let rootHolder: "other" | "dead" | "ours" | "none" = "other";
+        const second = yield* runTailscaleServe({
+          localPort: 13774,
+          servePort: 8443,
+          rootHolder: Effect.sync(() => rootHolder),
+        }).pipe(Effect.scoped, Effect.forkScoped);
         yield* TestClock.adjust(0);
+        assert.equal(attempts, 3, "another live server keeps its route");
+        rootHolder = "dead";
+        yield* TestClock.adjust("30 seconds");
         assert.deepEqual(commands.at(-1), [
           "serve",
           "--bg",
           "--https=8443",
           "http://127.0.0.1:13774",
         ]);
+        rootHolder = "ours";
+        yield* TestClock.adjust("1 minute");
+        assert.equal(attempts, 4, "a working route is left alone");
+        rootHolder = "none";
+        yield* TestClock.adjust("30 seconds");
+        assert.equal(attempts, 5, "a removed route is recreated");
         yield* Fiber.interrupt(second);
         assert.equal(commands.filter((args) => args.includes("off")).length, 2);
         const replaced = yield* runTailscaleServe({ localPort: 13774, servePort: 8443 }).pipe(

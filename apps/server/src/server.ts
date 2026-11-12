@@ -33,6 +33,7 @@ import { withUntracedRequests } from "./http.ts";
 import * as ServerHttp from "./http.ts";
 import {
   guardHttpResponseWriteErrors,
+  keepIdleConnections,
   rejectRequestsUntilServing,
 } from "./httpResponseErrorGuard.ts";
 import { fixPath } from "./os-jank.ts";
@@ -214,7 +215,7 @@ import * as OrchestrationHttp from "./orchestration-v2/http.ts";
 import * as ProjectHttp from "./project/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
-import { runTailscaleServe } from "@t3tools/tailscale";
+import { readTailscaleServeRootHolders, runTailscaleServe } from "@t3tools/tailscale";
 import * as ServerActivation from "./serverActivation.ts";
 
 // Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
@@ -348,7 +349,7 @@ const layerHttpServer = Layer.unwrap(
     return NodeHttpServer.layer(
       () => {
         const server = rejectRequestsUntilServing(
-          guardHttpResponseWriteErrors(NodeHttp.createServer()),
+          keepIdleConnections(guardHttpResponseWriteErrors(NodeHttp.createServer())),
         );
         if (config.privateNetworkOnly) {
           server.on("connection", (socket) => {
@@ -695,7 +696,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
   ),
   Layer.provideMerge(ProviderRegistry.layer),
-  Layer.provideMerge(ProviderInstanceRegistryHydration.layer),
+  Layer.provideMerge(
+    ProviderInstanceRegistryHydration.layer.pipe(Layer.provide(SqlitePersistence.layerConfig)),
+  ),
   // One gate for the server, below hydration so the Claude adapter sees it: layers memoize by
   // reference, so the runtime layer shares it.
   Layer.provideMerge(ProviderInstallationGate.layer),
@@ -897,6 +900,22 @@ const layerMakeServer = Layer.unwrap(
           );
       }),
     );
+    // Who holds the Serve port's root: nobody, this server, only dead loopback ports (an unclean
+    // exit leaves one), or another live server or app, whose route is left alone.
+    const tailscaleServeRootHolder = Effect.fn("server.tailscaleServeRootHolder")(
+      function* (target: { readonly host: string; readonly port: number }) {
+        const net = yield* NetService.NetService;
+        const holders = yield* readTailscaleServeRootHolders(config.tailscaleServePort, target);
+        if (holders.length === 0) return "none" as const;
+        if (holders.some((holder) => holder.ours)) return "ours" as const;
+        const live = yield* Effect.forEach(holders, (holder) =>
+          holder.ours || holder.loopback === undefined
+            ? Effect.succeed(true)
+            : net.hasListenerOnHost(holder.loopback.port, holder.loopback.host),
+        );
+        return live.includes(true) ? ("other" as const) : ("dead" as const);
+      },
+    );
     const layerTailscaleServe = config.tailscaleServeEnabled
       ? Layer.effectDiscard(
           Effect.gen(function* () {
@@ -908,13 +927,21 @@ const layerMakeServer = Layer.unwrap(
               return;
             }
 
+            const net = yield* NetService.NetService;
             yield* runTailscaleServe({
               localPort: address.port,
               servePort: config.tailscaleServePort,
               localHost: loopbackUrlHostForAddress(address),
+              rootHolder: tailscaleServeRootHolder({
+                host: loopbackUrlHostForAddress(address).replace(/^\[|\]$/gu, ""),
+                port: address.port,
+              }).pipe(
+                Effect.provideService(NetService.NetService, net),
+                Effect.orElseSucceed(() => "unreadable" as const),
+              ),
             }).pipe(Effect.forkScoped);
           }),
-        )
+        ).pipe(Layer.provide(NetService.layer))
       : Layer.empty;
     const layerCloudDesiredLinkReconcile = Layer.effectDiscard(
       Effect.gen(function* () {
