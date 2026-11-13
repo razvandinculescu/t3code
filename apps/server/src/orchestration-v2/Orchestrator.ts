@@ -758,6 +758,26 @@ function cancelledAppOwnedTask(
   };
 }
 
+// A workspace change detaches the session, which can settle the calling run at once. Queuing its
+// follow-up in a later command would let a delegated task report its result before that exists.
+function metadataUpdateContinuation(
+  command: Extract<OrchestrationV2Command, { readonly type: "thread.metadata.update" }>,
+): Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }> | undefined {
+  return command.continuation === undefined
+    ? undefined
+    : {
+        type: "message.dispatch",
+        commandId: command.commandId,
+        threadId: command.threadId,
+        messageId: command.continuation.messageId,
+        text: command.continuation.text,
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "mcp",
+      };
+}
+
 // Provider wakes can start follow-up work; monitor updates only report progress.
 // Dispatch takes the parent's lock for follow-ups because intake writes the parent.
 function mayStartSubagentFollowup(
@@ -1449,6 +1469,21 @@ function lastDeliveredRunForProviderThread(
         projection.providerTurns.some((turn) => turn.runAttemptId === run.activeAttemptId)),
   );
 }
+
+type DyingNativeSubagent = {
+  readonly projection: Pick<OrchestrationV2ThreadProjection, "nodes" | "subagents" | "turnItems">;
+  readonly subagent: Pick<
+    Extract<OrchestrationV2TurnItem, { readonly type: "subagent" }>,
+    "subagentId" | "origin" | "childThreadId" | "providerInstanceId"
+  >;
+};
+
+const nativeSubagentRef = (subagent: OrchestrationV2Subagent): DyingNativeSubagent["subagent"] => ({
+  subagentId: subagent.id,
+  origin: subagent.origin,
+  childThreadId: subagent.childThreadId,
+  providerInstanceId: subagent.providerInstanceId,
+});
 
 const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(function* () {
   const checkpointService = yield* CheckpointServiceV2;
@@ -6515,6 +6550,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         },
       } satisfies PendingOrchestrationEffectV2,
     ]);
+  });
+
+  // Providers own native subagent conversations; messages cannot target them, and adapters ask questions on the parent.
+  const refuseNativeSubagentMessage = Effect.fnUntraced(function* (
+    command: Pick<OrchestrationV2Command, "commandId"> & { readonly threadId: ThreadId },
+  ) {
+    const thread = yield* projectionStore
+      .getThread(command.threadId)
+      .pipe(
+        Effect.mapError(
+          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+        ),
+      );
+    if (isProviderNativeSubagentThread(thread)) {
+      return yield* new OrchestratorSubagentThreadReadOnlyError({
+        commandId: command.commandId,
+        threadId: command.threadId,
+      });
+    }
+    return thread;
   });
 
   const dispatchMessage = Effect.fn("Orchestrator.dispatchMessage")(function* (
@@ -11809,6 +11864,78 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
   });
 
+  // Ends each native subagent's record, its own thread's runless root turns, and the
+  // subagents it started there, which a provider can record on that thread rather than its parent's.
+  const endNativeSubagentTrees = Effect.fn("Orchestrator.endNativeSubagentTrees")(
+    function* (input: {
+      readonly command: Extract<
+        OrchestrationV2ServerCommand,
+        { readonly type: "run.interrupt" | "thread.background-work.settle" | "thread.stop" }
+      >;
+      readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
+      readonly dying: ReadonlyArray<DyingNativeSubagent>;
+      readonly childThreadIds: Set<ThreadId>;
+      readonly now: DateTime.Utc;
+    }) {
+      const allocateEventId = () =>
+        idAllocator.allocate.event({
+          threadId: input.command.threadId,
+          commandId: input.command.commandId,
+        });
+      const dying = [...input.dying];
+      const { childThreadIds } = input;
+      for (const { projection, subagent } of dying) {
+        const ended = yield* endOrphanedNativeSubagent({
+          projection,
+          subagentId: subagent.subagentId,
+          status: "interrupted",
+          now: input.now,
+          emitted: yield* Ref.get(input.events),
+          allocateEventId,
+        }).pipe(mapDispatchError(input.command));
+        yield* Ref.update(input.events, (events) => [...events, ...ended]);
+        const childThreadId = subagent.childThreadId;
+        if (
+          subagent.origin !== "provider_native" ||
+          childThreadId === null ||
+          childThreadIds.has(childThreadId)
+        ) {
+          continue;
+        }
+        childThreadIds.add(childThreadId);
+        const child = yield* projectionStore
+          .getThreadRecords(childThreadId, ["nodes", "providerTurns", "subagents", "turnItems"], {
+            // Runless items are the subagent's; any run there is the user's own.
+            turnItemRunIds: [null],
+            turnItemStatuses: ["pending", "running", "waiting"],
+          })
+          .pipe(
+            Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(null) }),
+            mapDispatchError(input.command),
+          );
+        if (child === null) continue;
+        const childEnded = yield* endRunlessRootTurns({
+          threadId: childThreadId,
+          providerInstanceId: subagent.providerInstanceId,
+          projection: child,
+          status: "interrupted",
+          now: input.now,
+          emitted: yield* Ref.get(input.events),
+          allocateEventId,
+        }).pipe(mapDispatchError(input.command));
+        yield* Ref.update(input.events, (events) => [...events, ...childEnded]);
+        for (const nested of child.turnItems) {
+          if (nested.type === "subagent") dying.push({ projection: child, subagent: nested });
+        }
+        for (const nested of child.subagents) {
+          if (nested.origin === "provider_native" && nested.runId === null) {
+            dying.push({ projection: child, subagent: nativeSubagentRef(nested) });
+          }
+        }
+      }
+    },
+  );
+
   const settleBackgroundWork = Effect.fn("Orchestrator.settleBackgroundWork")(function* (input: {
     readonly command: Extract<
       OrchestrationV2ServerCommand,
@@ -11825,11 +11952,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   }) {
     const emitEvent = emit(input.events, input.command);
     const runOrdinals = new Map(input.projection.runs.map((run) => [run.id, run.ordinal]));
-    const allocateEventId = () =>
-      idAllocator.allocate.event({
-        threadId: input.command.threadId,
-        commandId: input.command.commandId,
-      });
     const childThreadIds = new Set<ThreadId>();
     const liveness = new Map<string, boolean>();
     const hasLiveSession = Effect.fn("Orchestrator.hasLiveSession")(function* (
@@ -11894,76 +12016,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         },
       });
       if (item.type !== "subagent") continue;
-      // A native subagent died with the process too: end its record, its own
-      // thread's runless root turn, and the subagents it started there, which
-      // a provider can record on that thread rather than this one.
-      const dying: Array<{
-        readonly projection: Pick<
-          OrchestrationV2ThreadProjection,
-          "nodes" | "subagents" | "turnItems"
-        >;
-        readonly subagent: Pick<
-          Extract<OrchestrationV2TurnItem, { readonly type: "subagent" }>,
-          "subagentId" | "origin" | "childThreadId" | "providerInstanceId"
-        >;
-      }> = [{ projection: input.projection, subagent: item }];
-      for (const { projection, subagent } of dying) {
-        const ended = yield* endOrphanedNativeSubagent({
-          projection,
-          subagentId: subagent.subagentId,
-          status: "interrupted",
-          now: input.now,
-          emitted: yield* Ref.get(input.events),
-          allocateEventId,
-        }).pipe(mapDispatchError(input.command));
-        yield* Ref.update(input.events, (events) => [...events, ...ended]);
-        const childThreadId = subagent.childThreadId;
-        if (
-          subagent.origin !== "provider_native" ||
-          childThreadId === null ||
-          childThreadIds.has(childThreadId)
-        ) {
-          continue;
-        }
-        childThreadIds.add(childThreadId);
-        const child = yield* projectionStore
-          .getThreadRecords(childThreadId, ["nodes", "providerTurns", "subagents", "turnItems"], {
-            // Runless items are the subagent's; any run there is the user's own.
-            turnItemRunIds: [null],
-            turnItemStatuses: ["pending", "running", "waiting"],
-          })
-          .pipe(
-            Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(null) }),
-            mapDispatchError(input.command),
-          );
-        if (child === null) continue;
-        const childEnded = yield* endRunlessRootTurns({
-          threadId: childThreadId,
-          providerInstanceId: subagent.providerInstanceId,
-          projection: child,
-          status: "interrupted",
-          now: input.now,
-          emitted: yield* Ref.get(input.events),
-          allocateEventId,
-        }).pipe(mapDispatchError(input.command));
-        yield* Ref.update(input.events, (events) => [...events, ...childEnded]);
-        for (const nested of child.turnItems) {
-          if (nested.type === "subagent") dying.push({ projection: child, subagent: nested });
-        }
-        for (const nested of child.subagents) {
-          if (nested.origin === "provider_native" && nested.runId === null) {
-            dying.push({
-              projection: child,
-              subagent: {
-                subagentId: nested.id,
-                origin: nested.origin,
-                childThreadId: nested.childThreadId,
-                providerInstanceId: nested.providerInstanceId,
-              },
-            });
-          }
-        }
-      }
+      // A native subagent died with the process too.
+      yield* endNativeSubagentTrees({
+        command: input.command,
+        events: input.events,
+        dying: [{ projection: input.projection, subagent: item }],
+        childThreadIds,
+        now: input.now,
+      });
     }
     for (const providerThread of input.projection.providerThreads) {
       if ((providerThread.pendingBackgroundTasks?.length ?? 0) === 0) continue;
@@ -13439,6 +13499,36 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     for (const run of reached.values()) {
       yield* markStoppedRun({ command, events, thread: projection.thread, run, now });
     }
+    // Record and item are written together, so an active record without a live item lost its end.
+    const staleNative = (target === undefined ? projection.subagents : []).filter(
+      (subagent) =>
+        subagent.origin === "provider_native" &&
+        subagent.runId !== null &&
+        isOrchestrationV2WorkActive(subagent.status) &&
+        !projection.turnItems.some(
+          (item) => item.type === "subagent" && item.subagentId === subagent.id,
+        ),
+    );
+    if (staleNative.length > 0) {
+      const { nodes } = yield* projectionStore
+        .getThreadRecords(command.threadId, ["nodes"])
+        .pipe(mapDispatchError(command));
+      const threadProjection = {
+        nodes,
+        subagents: projection.subagents,
+        turnItems: projection.turnItems,
+      };
+      yield* endNativeSubagentTrees({
+        command,
+        events,
+        dying: staleNative.map((subagent) => ({
+          projection: threadProjection,
+          subagent: nativeSubagentRef(subagent),
+        })),
+        childThreadIds: new Set(),
+        now,
+      });
+    }
     yield* holdStoppedThread({ command, events, projection, cohortRunIds: [], now });
     yield* cancelIdleOrphans({ command, events, projection });
     yield* stopDelegatedTasks;
@@ -14660,7 +14750,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.active.reorder":
       case "thread.tag.set":
       case "thread.mark-unread":
-      case "thread.metadata.update":
       case "thread.pull-request.link":
       case "thread.pull-request.unlink":
       case "thread.pull-request-link.sync":
@@ -14673,6 +14762,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "provider.switch":
         yield* dispatchThreadMutation(command, events, effects);
         break;
+      case "thread.metadata.update": {
+        const continuation = metadataUpdateContinuation(command);
+        if (continuation !== undefined) yield* refuseNativeSubagentMessage(command);
+        yield* dispatchThreadMutation(command, events, effects);
+        if (continuation !== undefined) {
+          cancelUnsettledEffects = yield* dispatchMessage(continuation, events, effects);
+          yield* recordSubagentFollowup(continuation, events).pipe(mapDispatchError(command));
+        }
+        break;
+      }
       case "thread.pull-request-watch.checks-reopen":
         yield* dispatchThreadMutation(command, events, effects);
         break;
@@ -14693,20 +14792,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* dispatchThreadProjectAdoptFolder(command, events);
         break;
       case "message.dispatch": {
-        // Providers own native subagent conversations; messages cannot target them, and adapters ask questions on the parent.
-        const thread = yield* projectionStore
-          .getThread(command.threadId)
-          .pipe(
-            Effect.mapError(
-              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-            ),
-          );
-        if (isProviderNativeSubagentThread(thread)) {
-          return yield* new OrchestratorSubagentThreadReadOnlyError({
-            commandId: command.commandId,
-            threadId: command.threadId,
-          });
-        }
+        const thread = yield* refuseNativeSubagentMessage(command);
         const guestSend =
           command.guestMessageId === undefined
             ? undefined
@@ -15289,11 +15375,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
     // Taken before the lineage read, so a message whose read yields keeps its
     // place ahead of later messages to the same thread.
-    if (command.type === "message.dispatch")
+    const message =
+      command.type === "thread.metadata.update" ? metadataUpdateContinuation(command) : command;
+    if (message?.type === "message.dispatch")
       return yield* messageIntake.withLock(
-        command.threadId,
-        mayStartSubagentFollowup(command)
-          ? withSubagentParentLock(command.threadId, dispatch)
+        message.threadId,
+        mayStartSubagentFollowup(message)
+          ? withSubagentParentLock(message.threadId, dispatch)
           : dispatch,
       );
     // Answering a message-mode question can also start a follow-up.
