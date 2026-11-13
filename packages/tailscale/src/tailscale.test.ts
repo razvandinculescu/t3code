@@ -11,7 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/http";
-import { ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
@@ -113,6 +113,7 @@ describe("tailscale", () => {
       ] as const) {
         const reachable = yield* probeTailscaleHttpsEndpoint({
           baseUrl: "https://desktop.example.ts.net",
+          environmentId: "this-environment",
         }).pipe(
           Effect.provideService(
             HttpClient.HttpClient,
@@ -123,6 +124,34 @@ describe("tailscale", () => {
         );
         assert.isFalse(reachable, `HTTP ${status} without a T3 descriptor`);
       }
+    }),
+  );
+
+  it.effect("does not treat another T3 server behind the Serve URL as this server", () =>
+    Effect.gen(function* () {
+      const answer = (environmentId: string) =>
+        HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                environmentId,
+                label: "T3 server",
+                platform: { os: "linux", arch: "x64" },
+                serverVersion: "0.1.9",
+                capabilities: { repositoryIdentity: true },
+              }),
+            ),
+          ),
+        );
+      const probe = (served: string) =>
+        probeTailscaleHttpsEndpoint({
+          baseUrl: "https://desktop.example.ts.net",
+          environmentId: "this-environment",
+        }).pipe(Effect.provideService(HttpClient.HttpClient, answer(served)));
+
+      assert.isTrue(yield* probe("this-environment"));
+      assert.isFalse(yield* probe("another-environment"));
     }),
   );
 
@@ -258,6 +287,7 @@ describe("tailscale", () => {
     Effect.gen(function* () {
       const status = yield* parseTailscaleStatus(tailscaleStatusJson);
       assert.deepEqual(status, {
+        running: null,
         magicDnsName: "desktop.tail.ts.net",
         tailnetIpv4Addresses: ["100.100.100.100"],
         httpsServeEnabled: null,
@@ -472,8 +502,10 @@ describe("tailscale", () => {
     "bounds retry delays and cancels recovery without deleting an unconfigured mapping",
     () => {
       const commands: ReadonlyArray<string>[] = [];
+      let attempts = 0;
       const layer = layerMockSpawner((_command, args) => {
         commands.push(args);
+        if (args.includes("--bg")) attempts++;
         return { code: 1, stderr: "tailscaled is not running" };
       });
 
@@ -484,11 +516,11 @@ describe("tailscale", () => {
         );
         yield* TestClock.adjust(0);
         for (const delay of [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]) {
-          const previous = commands.length;
+          const previous = attempts;
           yield* TestClock.adjust(delay - 1);
-          assert.equal(commands.length, previous);
+          assert.equal(attempts, previous);
           yield* TestClock.adjust(1);
-          assert.equal(commands.length, previous + 1);
+          assert.equal(attempts, previous + 1);
         }
         yield* Fiber.interrupt(fiber);
         const stoppedCount = commands.length;
@@ -502,7 +534,10 @@ describe("tailscale", () => {
   it.effect("retries a timed-out configure command without blocking cancellation", () => {
     let attempts = 0;
     const layer = layerSpawner(
-      ChildProcessSpawner.make(() => {
+      ChildProcessSpawner.make((command) => {
+        if (ChildProcess.isStandardCommand(command) && command.args[0] === "status") {
+          return Effect.succeed(mockHandle({ stdout: '{"Self":{"CapMap":{"https":[]}}}' }));
+        }
         attempts++;
         return Effect.succeed(neverFinishingMockHandle());
       }),
@@ -560,6 +595,29 @@ describe("tailscale", () => {
     }),
   );
 
+  // regression: #35510 - without the https capability `tailscale serve` prints an
+  // enablement notice, writes no Serve config, and still exits 0.
+  it.effect("fails serve when the tailnet has not enabled HTTPS", () => {
+    const layer = layerMockSpawner((_command, args) => {
+      if (args[0] === "status") {
+        return {
+          stdout:
+            '{"BackendState":"Running","Self":{"DNSName":"desktop.tail.ts.net.","CapMap":{}}}',
+        };
+      }
+      if (args[1] === "status") return { stdout: "{}\n" };
+      return { stdout: "\nYou don't have permission to enable this feature.\n" };
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* ensureTailscaleServe({ localPort: 3773 }).pipe(
+        Effect.provide(layer),
+        Effect.exit,
+      );
+      assert.isTrue(Exit.isFailure(exit), "no Serve route was configured");
+    });
+  });
+
   // regression: #21609 - without forceKillAfter a timed-out probe only gets
   // SIGTERM, so a group member that ignores it outlives the call.
   it.effect("escalates timed-out probes to SIGKILL", () => {
@@ -582,7 +640,7 @@ describe("tailscale", () => {
       yield* readTailscaleStatus.pipe(Effect.provide(layer));
       yield* readTailscaleSshEnabled.pipe(Effect.provide(layer));
       yield* ensureTailscaleServe({ localPort: 45_678 }).pipe(Effect.provide(layer));
-      assert.deepEqual(killGraces, [500, 500, 500]);
+      assert.deepEqual(killGraces, [500, 500, 500, 500]);
     });
   });
 });

@@ -289,7 +289,7 @@ it.effect(
           url,
         );
       }
-    }).pipe(Effect.scoped),
+    }),
 );
 
 it.effect("does not refine a context whose server address is empty", () =>
