@@ -23,7 +23,7 @@ concurrency:
 jobs:
   build:
     name: Build unsigned iOS arm64
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 75
     env:
       APP_VARIANT: production
@@ -48,7 +48,7 @@ jobs:
           sparse-checkout-cone-mode: false
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: latest-stable
+          xcode-version: "27.1"
       - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
