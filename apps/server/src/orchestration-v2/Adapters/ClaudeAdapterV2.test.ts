@@ -6975,6 +6975,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
           nativeTurnId: "turn:mcp-app-context-0",
         }),
+        requestRuntimeRestart: true,
       });
       assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "interrupted");
       assert.include(yield* runTurn(1, "Created Jira issue PROJ-42"), "PROJ-42");
