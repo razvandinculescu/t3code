@@ -2,10 +2,10 @@ import {
   collectLimitAccounts,
   type LimitAccount,
   collectLimitPools,
-  cursorUsageWindowDetails,
   displayLimitWindows,
-  formatResetsIn,
 } from "@t3tools/shared/usageLimits";
+import { cursorUsageWindowDetails, formatResetsIn } from "@t3tools/shared/usageLimitsCopy";
+import { T, useGT, useMessages } from "gt-react";
 import { TicketIcon } from "lucide-react";
 
 import { barColor, PaceIcon } from "./UsageLimits";
@@ -35,6 +35,8 @@ function AccountCards({
   readonly accounts: readonly LimitAccount[];
   readonly now: number;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   return (
     <div className="@container">
       <div className="columns-1 gap-4 @min-[42rem]:columns-2">
@@ -55,7 +57,11 @@ function AccountCards({
                 {credits > 0 ? (
                   <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
                     <TicketIcon className="size-3.5" aria-hidden />
-                    <span>{credits} resets</span>
+                    <span>
+                      {gt("{count, plural, one {{count} reset} other {{count} resets}}", {
+                        count: credits,
+                      })}
+                    </span>
                   </span>
                 ) : null}
               </header>
@@ -63,10 +69,10 @@ function AccountCards({
                 {displayLimitWindows(pool).map((window) => {
                   const member = window.members[0]!;
                   const reset = window.resets[0];
-                  const resetsIn = formatResetsIn(member.window, now);
+                  const resetsIn = formatResetsIn(member.window, now, m);
                   const details =
                     pool.driver === "cursor"
-                      ? cursorUsageWindowDetails(window.id, pool)
+                      ? cursorUsageWindowDetails(window.id, pool, m)
                       : undefined;
                   return (
                     <div key={`${window.kind}:${window.id}`} className="space-y-2.5 py-4">
@@ -78,7 +84,9 @@ function AccountCards({
                           <span className="text-xl font-semibold tabular-nums text-foreground">
                             {window.remainingPercent}%
                           </span>
-                          <span className="text-xs text-muted-foreground">left</span>
+                          <span className="text-xs text-muted-foreground">
+                            <T>left</T>
+                          </span>
                         </span>
                       </div>
                       <div className="grid grid-cols-1">
@@ -96,7 +104,7 @@ function AccountCards({
                       </div>
                       <div className="flex min-h-4 items-center justify-between gap-2 text-xs text-muted-foreground">
                         <span className="tabular-nums">
-                          {resetsIn ?? "Reset time not reported"}
+                          {resetsIn ?? gt("Reset time not reported")}
                         </span>
                         {window.pace ? <PaceIcon pace={window.pace} /> : null}
                       </div>

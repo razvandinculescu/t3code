@@ -1,6 +1,5 @@
 import { type ServerProvider } from "@t3tools/contracts";
 import { type LimitAccount } from "./usageLimits.ts";
-import { limitsNotice } from "./usageLimits.ts";
 
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -19,7 +18,6 @@ import {
   withUsageLimitsCommands,
   collectLimitAccounts,
   collectExternalUsageLinks,
-  collectLimitNotices,
   collectLimitPools,
   elapsedShare,
   exhaustedUsageWindow,
@@ -28,6 +26,7 @@ import {
   usesChatGptSharing,
   resolveNewThreadModelSelection,
 } from "./usageLimits.ts";
+import { collectLimitNotices, limitsNotice } from "./usageLimitsCopy.ts";
 
 const now = Date.parse("2026-09-03T12:00:00.000Z");
 
@@ -226,8 +225,8 @@ describe("limitsNotice", () => {
   it("does not present old cached percentages as current limits", () => {
     const checkedAt = "2026-09-03T11:00:00.000Z";
     const limits = { checkedAt, windows: [window] };
-    expect(limitsNotice(limits, Date.parse(checkedAt) + 15 * 60_000)).toBeNull();
-    expect(limitsNotice(limits, Date.parse(checkedAt) + 15 * 60_000 + 1)).toBe(
+    expect(limitsNotice(limits, undefined, Date.parse(checkedAt) + 15 * 60_000)).toBeNull();
+    expect(limitsNotice(limits, undefined, Date.parse(checkedAt) + 15 * 60_000 + 1)).toBe(
       "Limits are out of date. Refresh to try again.",
     );
   });
@@ -1810,7 +1809,7 @@ describe("pooled cached wrapper limits", () => {
       redeem: { environmentId: "env-a", input: { instanceId: "claude-k3" } },
     });
     expect(collectLimitAccounts(input, expiresAt + 1)).toEqual([]);
-    expect(collectLimitNotices(input, expiresAt + 1)).toEqual([
+    expect(collectLimitNotices(input, undefined, expiresAt + 1)).toEqual([
       "Kimi K3: Limits are out of date. Refresh to try again.",
     ]);
   });
@@ -1844,7 +1843,7 @@ describe("pooled cached wrapper limits", () => {
       ],
     ]);
     expect(collectLimitAccounts(input, now)).toEqual([]);
-    expect(collectLimitNotices(input, now)).toEqual([
+    expect(collectLimitNotices(input, undefined, now)).toEqual([
       "Hub: Limits are out of date. Refresh to try again.",
     ]);
   });
