@@ -3,7 +3,10 @@ import * as NodeModule from "node:module";
 import * as NodeVM from "node:vm";
 import { transformSync, types, type PluginObj } from "@babel/core";
 import { expect, it, vi } from "vite-plus/test";
+import * as errors from "@t3tools/client-runtime/errors";
 import * as runtime from "@t3tools/client-runtime/state/runtime";
+import * as gt from "gt-react-native";
+import * as messages from "../../i18n/messages";
 import type { AppUpdateClient } from "./app-updates";
 
 it("checks updates on foreground without evaluating optional native exports", async () => {
@@ -52,6 +55,9 @@ it("checks updates on foreground without evaluating optional native exports", as
     if (name === "react-native") return native;
     if (name === "expo-updates") return { isEnabled: false };
     if (name === "@t3tools/client-runtime/state/runtime") return runtime;
+    if (name === "@t3tools/client-runtime/errors") return errors;
+    if (name === "gt-react-native") return gt;
+    if (name === "../../i18n/messages") return messages;
     throw new Error(`Unexpected module: ${name}`);
   };
   NodeVM.runInNewContext(compiled, {
