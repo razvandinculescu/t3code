@@ -332,7 +332,7 @@ function MachineBetaSection({
 
 export function TranscriptSettingsSection() {
   const gt = useGT();
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const preferences = useAtomValue(mobilePreferencesAtom);
   const reasoningExpandedByDefault =
     AsyncResult.isSuccess(preferences) && preferences.value.reasoningExpandedByDefault === true;
@@ -346,14 +346,18 @@ export function TranscriptSettingsSection() {
         label={gt("Expand Thinking Blocks")}
         subtitle={gt("Keep reasoning visible and open after a response finishes")}
         value={reasoningExpandedByDefault}
-        onValueChange={(value) => savePreferences({ reasoningExpandedByDefault: value })}
+        onValueChange={(value) => {
+          void savePreferences({ reasoningExpandedByDefault: value });
+        }}
       />
       <SettingsSwitchRow
         icon="slider.horizontal.3"
         label={gt("Expand Work Logs")}
         subtitle={gt("Show every work row and its details")}
         value={workLogExpandedByDefault}
-        onValueChange={(value) => savePreferences({ workLogExpandedByDefault: value })}
+        onValueChange={(value) => {
+          void savePreferences({ workLogExpandedByDefault: value });
+        }}
       />
     </SettingsSection>
   );
