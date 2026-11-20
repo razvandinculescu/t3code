@@ -1,3 +1,4 @@
+import { CollapsibleUserMessageBody } from "./CollapsibleUserMessageBody";
 import { msg, T, useGT, useLocale, useMessages } from "gt-react-native";
 import { m } from "../../i18n/messages";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
@@ -291,6 +292,7 @@ import {
 } from "@t3tools/client-runtime/workspace-basename-lookup";
 import {
   resolveThreadLink,
+  useEnvironmentPreviewTunnelOff,
   useLiveThreadLinkLabels,
   useQuietThreadShell,
   useThreadChipIcons,
@@ -1999,6 +2001,7 @@ function renderFeedEntry(
       expanded?: boolean,
       groupId?: string,
     ) => void;
+    readonly onToggleUserMessage: (rowId: string, anchorKey: string) => void;
     readonly onToggleTurnFold: (runId: RunId) => void;
     readonly onOpenTurnDiff: (checkpoint: ThreadCheckpointSummary) => void;
     readonly onPressPreview: (source: FilePreviewSource) => void;
@@ -2559,16 +2562,25 @@ function renderFeedEntry(
                     <MarkdownImageAvailableWidthContext
                       value={props.userBubbleMaxWidth - USER_BUBBLE_HORIZONTAL_PADDING * 2}
                     >
-                      <UserMessageContent
-                        text={renderedText}
-                        environmentId={props.environmentId}
-                        context={message.context}
-                        markdownStyles={styles}
-                        reviewCommentColors={props.reviewCommentColors}
-                        skills={props.skills}
-                        linkHandlers={props.markdownLinkHandlers}
-                        renderImage={props.renderMarkdownImage}
-                      />
+                      <CollapsibleUserMessageBody
+                        collapsible={foldRowId === null}
+                        expanded={props.expandedWorkRows[`message:${message.id}`] ?? false}
+                        onToggle={() =>
+                          props.onToggleUserMessage(`message:${message.id}`, entry.id)
+                        }
+                        bubbleColor={userBubbleColor}
+                      >
+                        <UserMessageContent
+                          text={renderedText}
+                          environmentId={props.environmentId}
+                          context={message.context}
+                          markdownStyles={styles}
+                          reviewCommentColors={props.reviewCommentColors}
+                          skills={props.skills}
+                          linkHandlers={props.markdownLinkHandlers}
+                          renderImage={props.renderMarkdownImage}
+                        />
+                      </CollapsibleUserMessageBody>
                     </MarkdownImageAvailableWidthContext>
                   ) : null}
                 </View>
@@ -3147,6 +3159,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const navigation = useNavigation();
   const openLinkedThread = useOpenLinkedThread();
   const openLocalPreview = useOpenLocalPreview();
+  const previewTunnelOff = useEnvironmentPreviewTunnelOff(props.environmentId);
+  // Without the tunnel, loopback links fall through to the system browser like any other link.
+  const deviceLoopbackUrl = (href: string) =>
+    previewTunnelOff ? null : loopbackUrlForDevice(href);
   // Recycling a row disposes its native audio player, so a started clip's row stays rendered.
   const [retainedMediaRowId, setRetainedMediaRowId] = useState<string | null>(null);
   const focused = useIsFocused();
@@ -3446,7 +3462,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       return;
     }
     // Safari would open the phone's own localhost, so these open on the device by default.
-    const deviceUrl = loopbackUrlForDevice(href);
+    const deviceUrl = deviceLoopbackUrl(href);
     if (deviceUrl) {
       openLocalPreview(
         { environmentId: String(props.environmentId), threadId: String(props.threadId) },
@@ -3584,7 +3600,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         };
       }
       // The environment's localhost, which this device can only reach through the tunnel.
-      if (loopbackUrlForDevice(href)) {
+      if (deviceLoopbackUrl(href)) {
         return {
           title: href,
           actions: [
@@ -3610,7 +3626,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         else if (actionId === "copy-thread-link") copyTextWithHaptic(hostedThreadLink(thread));
         return;
       }
-      const deviceUrl = loopbackUrlForDevice(href);
+      const deviceUrl = deviceLoopbackUrl(href);
       if (deviceUrl) {
         if (actionId === "open-on-device") {
           markdownLinkRequest.current?.abort();
@@ -4138,35 +4154,52 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     }, 1200);
   };
 
-  const onToggleWorkGroup = (groupId: string, anchorKey?: string, expanded = false) => {
+  // `expanded` is the shown state when the work-log settings make it differ from the stored one.
+  const onToggleWorkGroup = (groupId: string, anchorKey?: string, expanded?: boolean) => {
     preserveDisclosurePosition(anchorKey ?? `work-toggle:${groupId}`);
     setInteractionState((current) => ({
       ...current,
       expandedWorkGroups: {
         ...current.expandedWorkGroups,
-        [groupId]: !expanded,
+        [groupId]: !(expanded ?? current.expandedWorkGroups[groupId] ?? false),
       },
     }));
   };
 
+  // Lone rows share their group's disclosure state so opened details survive a second call joining.
   const onToggleWorkRow = (
     rowId: string,
     anchorKey?: string,
-    expanded = false,
+    expanded?: boolean,
     groupId?: string,
   ) => {
     preserveDisclosurePosition(anchorKey ?? null);
-    setInteractionState((current) => ({
-      ...current,
-      expandedWorkRows: {
-        ...current.expandedWorkRows,
-        [rowId]: !expanded,
-      },
-      ...(groupId === undefined
-        ? {}
-        : { expandedWorkGroups: { ...current.expandedWorkGroups, [groupId]: !expanded } }),
-    }));
+    setInteractionState((current) => {
+      const next = !(expanded ?? current.expandedWorkRows[rowId] ?? false);
+      return {
+        ...current,
+        expandedWorkRows: { ...current.expandedWorkRows, [rowId]: next },
+        ...(groupId === undefined
+          ? {}
+          : { expandedWorkGroups: { ...current.expandedWorkGroups, [groupId]: next } }),
+      };
+    });
   };
+
+  const onToggleUserMessage = (rowId: string, anchorKey: string) => {
+    const list = listRef.current;
+    if (expandedWorkRows[rowId] && list) {
+      const anchor = list.anchorVisibleContent({ key: anchorKey, hold: false });
+      const nextKey = groupedFeed[groupedFeed.findIndex((item) => item.id === anchorKey) + 1]?.id;
+      // Once the message top is scrolled away, collapse toward it like the web: what follows stays put.
+      if (anchor && anchor.offset > 0 && nextKey) {
+        onToggleWorkRow(rowId, nextKey);
+        return;
+      }
+    }
+    onToggleWorkRow(rowId, anchorKey);
+  };
+
   const onToggleTurnFold = (runId: RunId) => {
     preserveDisclosurePosition(`run-fold:${runId}`);
     setInteractionState((current) => {
@@ -4310,6 +4343,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             onCopyWorkRow,
             onToggleWorkGroup,
             onToggleWorkRow,
+            onToggleUserMessage,
             onToggleTurnFold,
             onOpenTurnDiff,
             onPressPreview,

@@ -70,6 +70,7 @@ import {
 } from "@t3tools/source-control-core/shared/definition";
 
 import * as GitHubClient from "../shared/definition.ts";
+import { makeGhProcess } from "./gitHubCliProcess.ts";
 import {
   PullRequestByNumber,
   PullRequestNode,
@@ -225,7 +226,7 @@ export const makeDiscovery = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
   const sourceControlHost = yield* SourceControlHost.SourceControlHost;
-  const process = sourceControlHost.process;
+  const process = yield* makeGhProcess;
   const environment = yield* HostProcess.Environment;
   const appSignIn = yield* GitHubAppSignIn.GitHubAppSignIn;
   const offerAppSignIn = <A extends SourceControlProviderDiscoveryItem>(item: A): A =>
