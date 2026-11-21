@@ -5017,6 +5017,7 @@ function buildAssistantArtifacts(input: {
   readonly completedAt: DateTime.Utc;
   // A streamed message keeps its first timestamp across updates.
   readonly createdAt?: DateTime.Utc;
+  readonly finalAnswer?: boolean;
 }): {
   readonly node: OrchestrationV2ExecutionNode;
   readonly message: OrchestrationV2ConversationMessage;
@@ -5091,6 +5092,7 @@ function buildAssistantArtifacts(input: {
       completedAt,
       updatedAt: input.completedAt,
       type: "assistant_message",
+      ...(input.finalAnswer === true ? { phase: "final_answer" as const } : {}),
       messageId,
       text: input.text,
       streaming,
@@ -9337,6 +9339,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly startedAt: DateTime.Utc;
           readonly completedAt: DateTime.Utc;
           readonly createdAt?: DateTime.Utc;
+          readonly finalAnswer?: boolean;
         }) {
           const ordinal = yield* resolveItemOrdinal(input.context, input.nativeItemId);
           const artifacts = buildAssistantArtifacts({
@@ -9350,6 +9353,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             startedAt: input.startedAt,
             completedAt: input.completedAt,
             ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+            ...(input.finalAnswer === undefined ? {} : { finalAnswer: input.finalAnswer }),
           });
           yield* Effect.all(
             [
@@ -12307,6 +12311,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               claudeEchoedPromptUuids(message).length > 0
             ) {
               context.heldResult = message;
+              // Claude ended its native turn on this reply; the run continues only for the steer.
+              const answer = context.assistant.lastReply;
+              if (answer !== null) {
+                yield* publishAssistantArtifacts({
+                  context,
+                  ...answer,
+                  createdAt: answer.startedAt,
+                  status: "completed",
+                  completedAt,
+                  finalAnswer: true,
+                });
+              }
               return;
             }
             yield* finalizeActiveTurn({
