@@ -1073,8 +1073,9 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
   ];
 }
 
-// The local transcription runtime adds GGML CPU-variant and Vulkan DLLs.
-export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 96;
+// The local transcription runtime adds GGML CPU-variant and Vulkan DLLs, and the server
+// compile cache adds one file per startup module.
+export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 112;
 export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
 export const WINDOWS_SERVER_EXTRA_RESOURCES = [
   {
