@@ -12,6 +12,7 @@ import type { HttpClient, HttpClientError, HttpClientResponse } from "effect/htt
 import * as Layer from "effect/Layer";
 import type * as Path from "effect/Path";
 import type * as Scope from "effect/Scope";
+import type * as FeatureFlags from "@t3tools/shared/FeatureFlags";
 
 import type { SourceControlDefinition } from "../shared/definition.ts";
 
@@ -82,7 +83,8 @@ export type SourceControlDriverServices =
   | HttpClient.HttpClient
   | FileSystem.FileSystem
   | Path.Path
-  | Digest.Digest;
+  | Digest.Digest
+  | FeatureFlags.FeatureFlags;
 
 export interface SourceControlDriver {
   readonly kind: SourceControlProviderKind;
