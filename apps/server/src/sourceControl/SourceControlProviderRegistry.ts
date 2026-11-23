@@ -225,6 +225,15 @@ function bindProviderContext(
         context: input.context ?? context,
       });
     }),
+    ...(provider.privateChangeRequestRemote === undefined
+      ? {}
+      : {
+          privateChangeRequestRemote: (input) =>
+            provider.privateChangeRequestRemote!({
+              ...input,
+              context: input.context ?? context,
+            }),
+        }),
     getRepositoryCloneUrls: Effect.fnUntraced(function* (input) {
       return yield* provider.getRepositoryCloneUrls({
         ...input,
