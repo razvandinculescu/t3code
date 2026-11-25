@@ -3,8 +3,6 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import { CommandAvailability } from "@t3tools/shared/shell";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
@@ -17,6 +15,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { VcsProcessSpawnError, VcsProcessTimeoutError } from "@t3tools/contracts";
 import { firstNonEmptyLine } from "@t3tools/source-control-core/server/discovery";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
 import { userFacingSourceControlDetail } from "@t3tools/source-control-core/server/SourceControlProvider";
@@ -25,6 +24,8 @@ import * as ForgejoCli from "./ForgejoCli.ts";
 import * as ForgejoPullRequestProvider from "./ForgejoPullRequestProvider.ts";
 import * as ForgejoSourceControlProvider from "./ForgejoSourceControlProvider.ts";
 import { markRequiredForgejoChecks } from "./forgejoRequiredChecks.ts";
+
+const onPath = (command: string) => `/usr/bin/${command}`;
 
 const processOutput = TestSourceControlHost.processOutput;
 
@@ -341,6 +342,15 @@ it.effect("follows the Forgejo repository's delete-branch-after-merge setting", 
         `repository setting ${JSON.stringify(setting)}`,
       );
     }
+    const { provider, writes } = forgejoMergeProvider(
+      Effect.succeed(JSON.stringify({ full_name: "reviewer/project" })),
+    );
+    yield* (yield* provider).runAction({ ...forgejoMergeInput, expectedHeadSha: "0a1b2c3d4" });
+    assert.deepStrictEqual(writes[0]?.body, {
+      Do: "squash",
+      delete_branch_after_merge: false,
+      head_commit_id: "0a1b2c3d4",
+    });
   }),
 );
 
@@ -1947,6 +1957,21 @@ it.effect("prefers fj for HTTP and ported SSH aliases on root servers", () => {
     });
     assert.strictEqual(viewer.stdout, '{"login":"maria"}');
     assert.strictEqual(requests.at(-1), "https://forgejo.local:3000/api/v1/user");
+    requests.length = 0;
+    yield* cli.api({
+      cwd: "/no-remotes",
+      reference: "http://forgejo.local:3000/maria/project/pulls/42",
+      path: "user",
+    });
+    yield* cli.api({
+      cwd: "/no-remotes",
+      repository: "http://forgejo.local:3000/maria/project",
+      path: "user",
+    });
+    assert.deepStrictEqual(requests, [
+      "https://forgejo.local:3000/api/v1/user",
+      "https://forgejo.local:3000/api/v1/user",
+    ]);
     const upstreamViewer = yield* cli.api({
       cwd: "/upstream-only",
       host: "forgejo.local:3000",
@@ -2279,23 +2304,14 @@ it.effect(
   "discovers fj first and retains configured authentication failures instead of switching accounts",
   () =>
     Effect.gen(function* () {
-      for (const scenario of [
-        "authenticated",
-        "revoked",
-        "missing",
-        "invalid-storage",
-        "absent",
-      ] as const) {
+      for (const scenario of ["authenticated", "revoked", "missing", "invalid-storage"] as const) {
         const commands: string[] = [];
         yield* Effect.gen(function* () {
           const spec = yield* ForgejoSourceControlProvider.makeDiscovery;
           assert.strictEqual(spec.type, "managed-cli");
           if (spec.type !== "managed-cli") return;
           const result = yield* spec.probe("/repo");
-          assert.strictEqual(
-            result.executable,
-            scenario === "missing" || scenario === "absent" ? "tea" : "fj",
-          );
+          assert.strictEqual(result.executable, scenario === "missing" ? "tea" : "fj");
           assert.strictEqual(
             result.auth.status,
             scenario === "revoked"
@@ -2308,23 +2324,18 @@ it.effect(
             assert.deepStrictEqual(result.auth.host, Option.some("forgejo.local:3000"));
           assert.deepStrictEqual(
             result.auth.account,
-            scenario === "authenticated" || scenario === "missing" || scenario === "absent"
+            scenario === "authenticated" || scenario === "missing"
               ? Option.some("maria")
               : Option.none(),
           );
           assert.strictEqual(
             commands.some((command) => command.startsWith("tea ")),
-            scenario === "missing" || scenario === "absent",
+            scenario === "missing",
           );
-          assert.strictEqual(commands.includes("fj version"), scenario !== "absent");
+          assert.include(commands, "fj version");
         }).pipe(
-          Effect.provideService(CommandAvailability, (command) =>
-            Effect.succeed(command !== "fj" || scenario !== "absent"),
-          ),
-          Effect.provideService(FileSystem.FileSystem, FileSystem.makeNoop({})),
           Effect.provide(
             Layer.mergeAll(
-              Path.layer,
               Layer.mock(ForgejoCli.ForgejoCli)({
                 getAccount: (input) => {
                   assert.strictEqual(scenario, "authenticated");
@@ -2416,6 +2427,7 @@ it.effect(
             ),
           ),
           Effect.provideService(HostProcess.HomeDirectory, "/home/maria"),
+          Effect.provideService(SpawnExecutableResolution, onPath),
         );
       }
     }),
@@ -2432,11 +2444,9 @@ it.effect("explains a slow fj instead of advising an install when tea is absent"
     assert.include(result.installHint, "`fj version` timed out");
     assert.notInclude(result.installHint, "Install");
   }).pipe(
-    Effect.provideService(CommandAvailability, (command) => Effect.succeed(command === "fj")),
-    Effect.provideService(FileSystem.FileSystem, FileSystem.makeNoop({})),
+    Effect.provideService(SpawnExecutableResolution, onPath),
     Effect.provide(
       Layer.mergeAll(
-        Path.layer,
         Layer.mock(ForgejoCli.ForgejoCli)({ listLogins: () => Effect.succeed([]) }),
         TestSourceControlHost.layer({
           process: {
@@ -2479,8 +2489,7 @@ it.effect("does not call a valid fj login on an HTTP-only server unauthenticated
     assert.strictEqual(result.executable, "fj");
     assert.notStrictEqual(result.auth.status, "unauthenticated");
   }).pipe(
-    Effect.provide(Path.layer),
-    Effect.provideService(CommandAvailability, (command) => Effect.succeed(command === "fj")),
+    Effect.provideService(SpawnExecutableResolution, onPath),
     Effect.provideService(
       FileSystem.FileSystem,
       FileSystem.makeNoop({

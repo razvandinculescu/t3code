@@ -3,8 +3,6 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import { CommandAvailability } from "@t3tools/shared/shell";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
@@ -74,14 +72,6 @@ export const discovery = {
 } satisfies SourceControlCliDiscoverySpec;
 
 export const makeDiscovery = Effect.gen(function* () {
-  const isAvailable = yield* CommandAvailability;
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const available = (command: string) =>
-    isAvailable(command).pipe(
-      Effect.provideService(FileSystem.FileSystem, fs),
-      Effect.provideService(Path.Path, path),
-    );
   const cli = yield* ForgejoCli.ForgejoCli;
   const { process } = yield* SourceControlHost.SourceControlHost;
   const listLogins = cli.listLogins;
@@ -114,7 +104,6 @@ export const makeDiscovery = Effect.gen(function* () {
         logins.find((entry) => entry.default === "true") ||
         logins[0];
       const fj = yield* probeSourceControlProvider({
-        available: available("fj"),
         // fj reads the cwd repository even with --host and fails on an unborn branch.
         cwd: yield* HostProcess.HomeDirectory,
         process,
@@ -169,12 +158,7 @@ export const makeDiscovery = Effect.gen(function* () {
         }
         return fj;
       }
-      const tea = yield* probeSourceControlProvider({
-        available: available("tea"),
-        cwd,
-        process,
-        spec: discovery,
-      });
+      const tea = yield* probeSourceControlProvider({ cwd, process, spec: discovery });
       // Discovery keeps the install hint only for an absent executable; a slow or broken fj
       // explains itself better than tea's install advice.
       const fjAbsent = fj.status === "missing" && fj.installHint === discovery.installHint;

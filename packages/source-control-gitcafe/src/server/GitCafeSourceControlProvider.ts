@@ -1,8 +1,6 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import { CommandAvailability } from "@t3tools/shared/shell";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -103,13 +101,6 @@ const cliDiscovery = {
 export const parseAuth = cliDiscovery.parseAuth;
 
 export const makeDiscovery = Effect.gen(function* () {
-  const isAvailable = yield* CommandAvailability;
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const available = isAvailable(cliDiscovery.executable).pipe(
-    Effect.provideService(FileSystem.FileSystem, fs),
-    Effect.provideService(Path.Path, path),
-  );
   const { process } = yield* SourceControlHost.SourceControlHost;
   const credentials = yield* GitCafeCredentials.GitCafeCredentials;
   return {
@@ -122,7 +113,6 @@ export const makeDiscovery = Effect.gen(function* () {
         Effect.result,
         Effect.flatMap((env) =>
           probeSourceControlProvider({
-            available,
             cwd,
             spec: cliDiscovery,
             process: {

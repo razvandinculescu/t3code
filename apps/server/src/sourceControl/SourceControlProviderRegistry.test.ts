@@ -1,6 +1,3 @@
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import { CommandAvailability } from "@t3tools/shared/shell";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -28,6 +25,7 @@ import type {
 import type * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import { fakeSourceControlProvider } from "@t3tools/source-control-testing/fakeSourceControlDriver";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
+import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as ServerConfig from "../config.ts";
@@ -86,6 +84,8 @@ const managedCli = (
   refineUnknownRemote: refine,
 });
 
+const onPath = (command: string) => `/usr/bin/${command}`;
+
 function makeRegistry(input: {
   readonly remotes: ReadonlyArray<{
     readonly name: string;
@@ -132,8 +132,6 @@ function makeRegistry(input: {
   ).pipe(
     Effect.provide(
       Layer.mergeAll(
-        FileSystem.layerNoop({}),
-        Path.layer,
         Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
           resolve: () =>
             Effect.succeed({
@@ -164,7 +162,6 @@ function makeRegistry(input: {
         }).pipe(Layer.provide(NodeServices.layer)),
       ),
     ),
-    Effect.provideService(CommandAvailability, () => Effect.succeed(true)),
   );
 }
 
@@ -510,7 +507,7 @@ it.effect("asks again once discovery finds a new sign-in, not on every discovery
     yield* registry.discover;
     assert.strictEqual((yield* resolveUnknown(registry, "c")).provider.kind, "gitlab");
     assert.strictEqual(refinements, 2);
-  }),
+  }).pipe(Effect.provideService(SpawnExecutableResolution, onPath)),
 );
 
 it.effect("answers discovery without waiting on a hosting API that stalls", () =>
@@ -535,5 +532,5 @@ it.effect("answers discovery without waiting on a hosting API that stalls", () =
     assert.strictEqual(bitbucket?.status, "available");
     assert.strictEqual(bitbucket?.auth.status, "unknown");
     assert.strictEqual(items.find((item) => item.kind === "gitlab")?.status, "available");
-  }),
+  }).pipe(Effect.provideService(SpawnExecutableResolution, onPath)),
 );

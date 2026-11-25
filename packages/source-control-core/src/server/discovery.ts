@@ -43,8 +43,13 @@ export type SourceControlCliDiscoverySpec = SourceControlDiscoverySpecBase & {
   readonly executable: string;
   readonly versionArgs: ReadonlyArray<string>;
   readonly authArgs: ReadonlyArray<string>;
-  /** Asked once when `authArgs` reports signed out; its answer counts only when it finds a sign-in. */
-  readonly authRetryArgs?: ReadonlyArray<string>;
+  /** Asked in order while the answer is signed out; one counts only when it finds a sign-in. */
+  readonly authRetryArgs?: (environment: NodeJS.ProcessEnv) => ReadonlyArray<ReadonlyArray<string>>;
+  /** Environment overrides for one auth or remote probe. */
+  readonly probeEnv?: (
+    args: ReadonlyArray<string>,
+    environment: NodeJS.ProcessEnv,
+  ) => Record<string, string>;
   readonly remoteRefinementArgs?: (
     context: SourceControlProvider.SourceControlProviderContext,
   ) => ReadonlyArray<string>;
@@ -195,24 +200,21 @@ function isCliRemoteRefinementSpec(
 const isVcsProcessTimeoutError = Schema.is(VcsProcessTimeoutError);
 const isVcsProcessExitError = Schema.is(VcsProcessExitError);
 
-const probeCli = Effect.fn("SourceControlProviderDiscovery.probeCli")(function* (input: {
+/** Checked before a probe spawns, so a CLI that is not installed records no failed process span. */
+export const isExecutableOnPath = Effect.fnUntraced(function* (executable: string) {
+  const resolveExecutable = yield* SpawnExecutableResolution;
+  const platform = yield* HostProcess.Platform;
+  const env = yield* HostProcess.Environment;
+  const path = yield* Effect.promise(async () => resolveExecutable(executable, platform, env));
+  return path !== undefined;
+});
+
+function probeCli(input: {
   readonly spec: SourceControlCliDiscoverySpec;
-  readonly available: Effect.Effect<boolean>;
   readonly process: SourceControlHost.SourceControlHost["Service"]["process"];
   readonly cwd: string;
-}): Effect.fn.Return<DiscoveryProbeResult> {
-  if (!(yield* input.available)) {
-    return {
-      kind: input.spec.kind,
-      label: input.spec.label,
-      executable: input.spec.executable,
-      status: "missing",
-      version: Option.none(),
-      installHint: input.spec.installHint,
-      detail: Option.some(input.spec.installHint),
-    };
-  }
-  return yield* input.process
+}): Effect.Effect<DiscoveryProbeResult> {
+  return input.process
     .run({
       operation: "source-control.discovery.probe",
       command: input.spec.executable,
@@ -251,10 +253,9 @@ const probeCli = Effect.fn("SourceControlProviderDiscovery.probeCli")(function* 
         }),
       ),
     );
-});
+}
 
 export function probeSourceControlProvider(input: {
-  readonly available: Effect.Effect<boolean>;
   readonly spec: SourceControlProviderDiscoverySpec;
   readonly process: SourceControlHost.SourceControlHost["Service"]["process"];
   readonly cwd: string;
@@ -284,13 +285,14 @@ export function probeSourceControlProvider(input: {
   }
 
   const spec = input.spec;
-  const runAuth = (args: ReadonlyArray<string>) =>
+  const runAuth = (args: ReadonlyArray<string>, environment: NodeJS.ProcessEnv) =>
     input.process
       .run({
         operation: "source-control.discovery.auth",
         command: spec.executable,
         args,
         cwd: input.cwd,
+        ...(spec.probeEnv ? { env: spec.probeEnv(args, environment) } : {}),
         allowNonZeroExit: true,
         timeoutMs: probeTimeoutMs(spec),
         maxOutputBytes: 8_000,
@@ -302,47 +304,36 @@ export function probeSourceControlProvider(input: {
           Effect.succeed(unknownAuth(Option.getOrUndefined(detailFromCause(cause)))),
         ),
       );
-  const retryArgs = spec.authRetryArgs;
-  const auth =
-    retryArgs === undefined
-      ? runAuth(spec.authArgs)
-      : runAuth(spec.authArgs).pipe(
-          Effect.filterOrElse(
-            (result) => result.status !== "unauthenticated",
-            (signedOut) =>
-              runAuth(retryArgs).pipe(
-                Effect.map((retry) => (retry.status === "authenticated" ? retry : signedOut)),
-              ),
-          ),
-        );
+  const auth = Effect.gen(function* () {
+    const environment = yield* HostProcess.Environment;
+    const first = yield* runAuth(spec.authArgs, environment);
+    if (first.status !== "unauthenticated") return first;
+    for (const retryArgs of spec.authRetryArgs?.(environment) ?? []) {
+      const retry = yield* runAuth(retryArgs, environment);
+      if (retry.status === "authenticated") return retry;
+    }
+    return first;
+  });
 
-  // The auth check does not depend on the version output, so both spawn at once.
-  return Effect.all(
-    [
-      probeCli({
-        available: input.available,
-        spec,
-        process: input.process,
-        cwd: input.cwd,
-      }),
-      input.available.pipe(
-        Effect.flatMap((available) =>
-          available
-            ? auth
-            : Effect.succeed(
-                unknownAuth("Hosting integration command was not found on the server PATH."),
-              ),
-        ),
-      ),
-    ],
-    { concurrency: "unbounded" },
-  ).pipe(
-    Effect.map(
-      ([item, auth]) =>
-        ({
-          ...item,
-          auth: item.status === "available" ? auth : unknownAuth(item.installHint),
-        }) satisfies SourceControlProviderDiscoveryItem,
+  // A CLI that is not installed is never spawned, and auth waits until the version probe answers.
+  return isExecutableOnPath(spec.executable).pipe(
+    Effect.flatMap((found): Effect.Effect<DiscoveryProbeResult> =>
+      found
+        ? probeCli({ spec, process: input.process, cwd: input.cwd })
+        : Effect.succeed({
+            kind: spec.kind,
+            label: spec.label,
+            executable: spec.executable,
+            status: "missing",
+            version: Option.none(),
+            installHint: spec.installHint,
+            detail: Option.none(),
+          }),
+    ),
+    Effect.flatMap((item): Effect.Effect<SourceControlProviderDiscoveryItem> =>
+      item.status === "available"
+        ? Effect.map(auth, (auth) => ({ ...item, auth }))
+        : Effect.succeed({ ...item, auth: unknownAuth(item.installHint) }),
     ),
   );
 }
@@ -435,27 +426,30 @@ function refineWithSpec(input: {
     return spec.refineUnknownRemote({ cwd: input.cwd, context });
   }
   if (!isCliRemoteRefinementSpec(spec)) return Effect.succeed(null);
-  return input.process
-    .run({
-      operation: "source-control.discovery.refine-unknown-remote",
-      command: spec.executable,
-      args: spec.remoteRefinementArgs?.(context) ?? spec.authArgs,
-      cwd: input.cwd,
-      allowNonZeroExit: true,
-      timeoutMs: probeTimeoutMs(spec),
-      maxOutputBytes: 8_000,
-      appendTruncationMarker: true,
-    })
-    .pipe(
-      Effect.catchIf(isMissingExecutable, () => Effect.void),
-      Effect.flatMap((auth) => {
-        const provider =
-          auth === undefined ? null : spec.refineUnknownRemote({ cwd: input.cwd, context, auth });
-        return provider === undefined
-          ? Effect.fail(new UnknownRemoteUnanswered())
-          : Effect.succeed(provider);
+  const args = spec.remoteRefinementArgs?.(context) ?? spec.authArgs;
+  return Effect.service(HostProcess.Environment).pipe(
+    Effect.flatMap((environment) =>
+      input.process.run({
+        operation: "source-control.discovery.refine-unknown-remote",
+        command: spec.executable,
+        args,
+        cwd: input.cwd,
+        ...(spec.probeEnv ? { env: spec.probeEnv(args, environment) } : {}),
+        allowNonZeroExit: true,
+        timeoutMs: probeTimeoutMs(spec),
+        maxOutputBytes: 8_000,
+        appendTruncationMarker: true,
       }),
-    );
+    ),
+    Effect.catchIf(isMissingExecutable, () => Effect.void),
+    Effect.flatMap((auth) => {
+      const provider =
+        auth === undefined ? null : spec.refineUnknownRemote({ cwd: input.cwd, context, auth });
+      return provider === undefined
+        ? Effect.fail(new UnknownRemoteUnanswered())
+        : Effect.succeed(provider);
+    }),
+  );
 }
 
 export const refineUnknownRemoteProvider = Effect.fn("refineUnknownRemoteProvider")(

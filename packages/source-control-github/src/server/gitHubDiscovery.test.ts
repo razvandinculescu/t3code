@@ -1,4 +1,3 @@
-import * as Path from "effect/Path";
 import { ServerSettings, SourceControlProviderKind } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { assert, it } from "@effect/vitest";
@@ -28,8 +27,6 @@ const makeDiscovery = (credential: GitHubRest.GitHubRest["Service"]["credential"
   GitHubSourceControlProvider.makeDiscovery.pipe(
     Effect.provide(
       Layer.mergeAll(
-        FileSystem.layerNoop({}),
-        Path.layer,
         Layer.mock(GitHubRest.GitHubRest)({ credential }),
         Layer.mock(GitHubAppSignIn.GitHubAppSignIn)({ enabled: false }),
         TestSourceControlHost.layer(),
@@ -147,8 +144,6 @@ it.effect.each([
     const discovery = yield* GitHubSourceControlProvider.makeDiscovery.pipe(
       Effect.provide(
         Layer.mergeAll(
-          FileSystem.layerNoop({}),
-          Path.layer,
           Layer.mock(GitHubRest.GitHubRest)({
             rest: (input) => {
               paths.push(input.path);

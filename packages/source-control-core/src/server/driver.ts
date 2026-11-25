@@ -10,7 +10,6 @@ import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import * as Layer from "effect/Layer";
-import type * as Path from "effect/Path";
 import type * as Scope from "effect/Scope";
 import type * as FeatureFlags from "@t3tools/shared/FeatureFlags";
 
@@ -82,7 +81,6 @@ export type SourceControlDriverServices =
   | SourceControlRateLimit.SourceControlRateLimit
   | HttpClient.HttpClient
   | FileSystem.FileSystem
-  | Path.Path
   | Digest.Digest
   | FeatureFlags.FeatureFlags;
 

@@ -1,6 +1,3 @@
-import { CommandAvailability } from "@t3tools/shared/shell";
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
@@ -262,9 +259,6 @@ function bindProviderContext(
 export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWithProviders")(
   function* (registrations: ReadonlyArray<SourceControlProviderRegistration>) {
     const config = yield* ServerConfig.ServerConfig;
-    const isAvailable = yield* CommandAvailability;
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const { process } = yield* SourceControlHost.SourceControlHost;
     const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
@@ -377,13 +371,6 @@ export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWit
         discoverySpecs,
         (spec) =>
           probeSourceControlProvider({
-            available:
-              spec.type === "cli"
-                ? isAvailable(spec.executable).pipe(
-                    Effect.provideService(FileSystem.FileSystem, fs),
-                    Effect.provideService(Path.Path, path),
-                  )
-                : Effect.succeed(true),
             spec,
             process,
             cwd: config.cwd,

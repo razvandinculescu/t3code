@@ -2,7 +2,6 @@ import { requireSettingsSecretLiteral, SourceControlProviderKind } from "@t3tool
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
 import {
   GraphQL,
   GraphQLClient,
@@ -22,7 +21,6 @@ import {
   type SourceControlRepositoryCloneUrls,
 } from "@t3tools/contracts";
 import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
-import { CommandAvailability } from "@t3tools/shared/shell";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { isSshRemoteUrl } from "@t3tools/shared/sourceControl";
@@ -217,14 +215,6 @@ function environmentTokenVariable(environment: NodeJS.ProcessEnv): string | null
 // `gh auth status` may not know environment tokens; check the API.
 export const makeDiscovery = Effect.gen(function* () {
   const api = yield* GitHubRest.GitHubRest;
-  const isAvailable = yield* CommandAvailability;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const available = (command: string) =>
-    isAvailable(command).pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, path),
-    );
   const sourceControlHost = yield* SourceControlHost.SourceControlHost;
   const process = yield* makeGhProcess;
   const environment = yield* HostProcess.Environment;
@@ -246,7 +236,6 @@ export const makeDiscovery = Effect.gen(function* () {
         current?.sourceControlHosts[GitHubClient.definition.kind],
       );
       const cli = yield* probeSourceControlProvider({
-        available: available("gh"),
         cwd,
         process: {
           run: (input) => process.run({ ...input, concurrency: GH_PROCESS_CONCURRENCY }),

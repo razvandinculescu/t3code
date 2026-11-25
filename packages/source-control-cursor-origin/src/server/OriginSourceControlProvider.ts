@@ -1,11 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import { SourceControlProviderError, SourceControlProviderKind } from "@t3tools/contracts";
 import { CURSOR_ORIGIN_WEB_BASE_URL } from "../shared/definition.ts";
-import { CommandAvailability } from "@t3tools/shared/shell";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import {
@@ -58,13 +56,6 @@ const discovery = {
  * what Publish fills in), rather than the email `origin auth status` reports.
  */
 export const makeDiscovery = Effect.gen(function* () {
-  const isAvailable = yield* CommandAvailability;
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const available = isAvailable(OriginCli.ORIGIN_COMMAND).pipe(
-    Effect.provideService(FileSystem.FileSystem, fs),
-    Effect.provideService(Path.Path, path),
-  );
   const cli = yield* OriginCli.OriginCli;
   const { process } = yield* SourceControlHost.SourceControlHost;
   return {
@@ -73,7 +64,7 @@ export const makeDiscovery = Effect.gen(function* () {
     label: discovery.label,
     installHint: discovery.installHint,
     probe: Effect.fn("OriginSourceControlProvider.discovery")(function* (cwd: string) {
-      const item = yield* probeSourceControlProvider({ available, cwd, process, spec: discovery });
+      const item = yield* probeSourceControlProvider({ cwd, process, spec: discovery });
       if (item.status !== "available" || item.auth.status !== "authenticated") return item;
       const namespace = yield* cli.personalNamespace(cwd).pipe(Effect.option);
       return { ...item, auth: { ...item.auth, account: namespace } };
