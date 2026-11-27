@@ -4829,6 +4829,7 @@ it.layer(
           layerMockSpawner((args) => {
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "2.1.332\n", stderr: "", code: 0 };
+            if (joined === "--t3-usage-limits-json") return { stdout: "", stderr: "", code: 1 };
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
