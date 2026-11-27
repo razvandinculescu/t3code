@@ -26,7 +26,6 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import { HttpClient } from "effect/http";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";
@@ -292,12 +291,6 @@ const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-antigravity-driver-config-",
 }).pipe(
   Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
-  Layer.provideMerge(
-    Layer.succeed(
-      HttpClient.HttpClient,
-      HttpClient.make(() => Effect.die("Unexpected quota request")),
-    ),
-  ),
   Layer.provideMerge(ServerSettings.layerTest()),
   Layer.provideMerge(
     Layer.mock(BackgroundPolicy.BackgroundPolicy)({
@@ -320,6 +313,25 @@ const layerTest = ProviderHostLive.layer.pipe(
 );
 
 it.layer(layerTest)("AntigravityDriver", (it) => {
+  it.effect.skipIf(windowsHost)(
+    "reports an incompatible managed runtime during a health check",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        yield* h.refresh();
+        const installed = yield* h.makeExecutable("1.5.0", { agentVersion: "1.5.0" });
+        h.controls.selected = installed;
+        const rejected = yield* h.refresh().pipe(Effect.flip);
+        expect(rejected.detail).toContain("Update it in Antigravity setup");
+
+        expect(yield* h.instance.snapshot.refresh).toMatchObject({
+          status: "error",
+          version: "1.5.0",
+          message: rejected.detail,
+        });
+      }),
+  );
+
   it.effect.skipIf(windowsHost)(
     "refreshes the selected executable and limits form capabilities to chat",
     () =>
@@ -543,41 +555,52 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
       }),
   );
 
-  it.effect.skipIf(windowsHost)(
-    "refuses to open a session on a PATH executable older than 1.5",
-    () =>
-      Effect.gen(function* () {
-        const h = yield* makeHarness();
-        const old = yield* h.makeExecutable("runtime old", { agentVersion: "1.4.5" });
-        h.controls.selected = { ...old, source: "path", version: null };
-        const threadId = ThreadId.make("thread-antigravity-old-runtime");
-        const modelSelection = { instanceId: h.instance.instanceId, model: "gemini-test-low" };
-        const error = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const workspace = yield* h.fs.makeTempDirectoryScoped({ prefix: "t3-ag-old-runtime-" });
-            const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-              runtimeMode: "approval-required",
-              interactionMode: "default",
-              cwd: workspace,
-            });
-            const session = yield* h.instance.orchestrationAdapter.openSession({
-              threadId,
-              providerSessionId: ProviderSessionId.make("provider-session-antigravity-old-runtime"),
-              modelSelection,
-              runtimePolicy,
-            });
-            yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
-          }),
-        ).pipe(Effect.flip);
-        const message = `Antigravity 1.4.5 does not work with this T3 Code release. Update the Antigravity executable at ${old.executablePath} to >=1.5.12 <2, then retry.`;
-        expect(knownProviderFailureMessage(error)).toBe(message);
-        expect((yield* h.refresh().pipe(Effect.flip)).detail).toBe(message);
-        const methods = (yield* h.readRequests).map((request) => request.method);
-        expect(methods).toContain("initialize");
-        expect(methods).not.toContain("session/new");
-        yield* h.assertClosed;
-      }),
-  );
+  for (const [agentVersion, expected] of [
+    ["1.4.5", "does not work with this T3 Code release"],
+    // 1.5.0 offers Claude and GPT only to allowlisted editors such as Zed.
+    ["1.5.0", "only serves allowlisted editors, not T3 Code"],
+  ] as const) {
+    it.effect.skipIf(windowsHost)(
+      `refuses to open a session on a PATH executable at ${agentVersion}`,
+      () =>
+        Effect.gen(function* () {
+          const h = yield* makeHarness();
+          const old = yield* h.makeExecutable("runtime old", { agentVersion });
+          h.controls.selected = { ...old, source: "path", version: null };
+          const threadId = ThreadId.make("thread-antigravity-old-runtime");
+          const modelSelection = { instanceId: h.instance.instanceId, model: "gemini-test-low" };
+          const error = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const workspace = yield* h.fs.makeTempDirectoryScoped({
+                prefix: "t3-ag-old-runtime-",
+              });
+              const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+                runtimeMode: "approval-required",
+                interactionMode: "default",
+                cwd: workspace,
+              });
+              const session = yield* h.instance.orchestrationAdapter.openSession({
+                threadId,
+                providerSessionId: ProviderSessionId.make(
+                  "provider-session-antigravity-old-runtime",
+                ),
+                modelSelection,
+                runtimePolicy,
+              });
+              yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
+            }),
+          ).pipe(Effect.flip);
+          const target = agentVersion === "1.4.5" ? ">=1.5.12 <2" : "1.5.1 or newer";
+          const message = `Antigravity ${agentVersion} ${expected}. Update the Antigravity executable at ${old.executablePath} to ${target}, then retry.`;
+          expect(knownProviderFailureMessage(error)).toBe(message);
+          expect((yield* h.refresh().pipe(Effect.flip)).detail).toBe(message);
+          const methods = (yield* h.readRequests).map((request) => request.method);
+          expect(methods).toContain("initialize");
+          expect(methods).not.toContain("session/new");
+          yield* h.assertClosed;
+        }),
+    );
+  }
 
   it.effect.skipIf(windowsHost)(
     "closes refresh processes and clears account metadata when Google sign-in is required",
