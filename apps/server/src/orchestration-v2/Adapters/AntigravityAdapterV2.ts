@@ -35,6 +35,7 @@ import {
   antigravitySubagentLaunches,
   describeAntigravitySubagentLaunches,
   readAntigravityChildrenAtWork,
+  readAntigravityExecutedModel,
   readAntigravityPendingReply,
   readAntigravitySubagentTranscript,
 } from "../../provider/acp/AntigravityChildWork.ts";
@@ -75,6 +76,7 @@ const AntigravityProviderCapabilitiesV2 = {
   tools: {
     ...AcpProviderCapabilitiesV2.tools,
     supportsMcpTools: true,
+    supportsBackgroundWait: true,
   },
   subagents: {
     ...AcpProviderCapabilitiesV2.subagents,
@@ -297,6 +299,7 @@ export function makeAntigravityAcpAdapterFlavor(
         readAntigravityClientTextFile({
           fileSystem: options.fileSystem,
           path: options.path,
+          cwd,
           allowedRoots: antigravityClientFileRoots(cwd),
           request,
         }),
@@ -355,6 +358,8 @@ export function makeAntigravityAcpAdapterFlavor(
               profileDirectory,
               sessionId,
             }),
+          executedModel: (sessionId: string) =>
+            readAntigravityExecutedModel({ profileDirectory, sessionId }),
         }),
   };
 }

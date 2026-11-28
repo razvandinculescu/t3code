@@ -72,6 +72,9 @@ export function limitsNotice(
   resolve: MFunctionType = mFallback,
   now?: number,
 ): string | null {
+  if (limits.needsUsageAccess) {
+    return resolve(msg("Allow usage access to show this agent's limits."));
+  }
   if (limits.unavailable?.reason === "unsupported") {
     return limits.unavailable.message ?? resolve(msg("This account has no subscription limits."));
   }

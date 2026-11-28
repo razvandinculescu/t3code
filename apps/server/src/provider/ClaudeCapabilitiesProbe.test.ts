@@ -15,6 +15,7 @@ import {
   externalClaudeUsageLimitsFromJson,
   probeClaudeCapabilities,
   probeClaudeWorkspaceSnapshot,
+  readExternalClaudeUsageIfUnsupported,
   spawnClaudeProbeThroughEnv,
 } from "./ClaudeProvider.ts";
 
@@ -84,6 +85,40 @@ it("rejects malformed wrapper usage instead of publishing misleading limits", ()
   );
   assert.equal(externalClaudeUsageLimitsFromJson("not json", "2026-09-04T12:00:00Z"), undefined);
 });
+
+it.effect("asks the wrapper for quotas only when Claude cannot report the account's limits", () =>
+  Effect.gen(function* () {
+    const wrapperAnswer = { kind: "hidden" } as const;
+    const neverAsked = Effect.die("the wrapper must not be asked");
+    const apiKeyAccount = {
+      subscriptionType: undefined,
+      tokenSource: "ANTHROPIC_AUTH_TOKEN",
+      apiProvider: "firstParty",
+    };
+    const subscription = {
+      subscriptionType: "max",
+      tokenSource: undefined,
+      apiProvider: "firstParty",
+    };
+
+    assert.deepEqual(
+      yield* readExternalClaudeUsageIfUnsupported(
+        { ...apiKeyAccount, usage: { rate_limits_available: false, rate_limits: null } },
+        Effect.succeed(wrapperAnswer),
+      ),
+      wrapperAnswer,
+    );
+    assert.equal(
+      yield* readExternalClaudeUsageIfUnsupported(
+        { ...apiKeyAccount, usage: { rate_limits_available: true, rate_limits: {} } },
+        neverAsked,
+      ),
+      undefined,
+    );
+    // A subscription whose usage read failed retries Claude; wrapper rows would hide that.
+    assert.equal(yield* readExternalClaudeUsageIfUnsupported(subscription, neverAsked), undefined);
+  }),
+);
 
 it("drops strict MCP mode, and only that, next to an administrator's managed-mcp.json", () => {
   const options = buildClaudeCapabilitiesProbeQueryOptions({

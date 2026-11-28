@@ -188,7 +188,10 @@ const sendFor = (
     return batches;
   });
 
-it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService test", (it) => {
+// The machine running the tests may opt out with DO_NOT_TRACK; each test chooses its own environment.
+it.layer(
+  Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, Layer.succeed(HostProcess.Environment, {})),
+)("AnalyticsService test", (it) => {
   it.effect("waits for desktop shell consent and honors a late telemetry opt-out", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = { T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1" };

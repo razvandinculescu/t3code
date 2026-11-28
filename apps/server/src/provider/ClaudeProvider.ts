@@ -177,7 +177,9 @@ function isClaudeFirstPartyOAuth(input: {
   );
 }
 
-function claudeUsageUnavailableFallback(input: Parameters<typeof isClaudeFirstPartyOAuth>[0]): {
+export function claudeUsageUnavailableFallback(
+  input: Parameters<typeof isClaudeFirstPartyOAuth>[0],
+): {
   readonly reason: "unsupported" | "probeFailed";
   readonly message?: string;
 } {
@@ -557,9 +559,11 @@ const probeClaudeCapabilitiesOnce = (
   claudeSettings: ClaudeSettings,
   environment?: NodeJS.ProcessEnv,
   cwd?: string,
-  includeStatus = true,
-  usageOnly = false,
+  includeStatus: boolean | "usageOnly" = true,
+  withoutSettingSources = false,
 ) => {
+  const includeUsage = includeStatus !== false;
+  const includeSettings = includeStatus === true;
   const abort = new AbortController();
   const abortProbe = Effect.sync(() => {
     if (!abort.signal.aborted) abort.abort();
@@ -571,8 +575,8 @@ const probeClaudeCapabilitiesOnce = (
       claudeEnvironment,
     );
     const managedMcpConfig = yield* hasClaudeManagedMcpConfig();
-    // Workspace probes (no usage) discard models; the machine probe refreshes the shared cache.
-    const graceMs = includeStatus
+    // Workspace and usage-only probes discard models; the machine probe refreshes the shared cache.
+    const graceMs = includeSettings
       ? claudeGatewayDiscoveryGraceMs({
           ...claudeEnvironment,
           ...(yield* readClaudeSettingsEnv(claudeSettings, cwd, claudeEnvironment)),
@@ -601,7 +605,7 @@ const probeClaudeCapabilitiesOnce = (
               managedMcpConfig,
               spawnVia,
             }),
-            ...(usageOnly ? { settingSources: [] } : {}),
+            ...(withoutSettingSources ? { settingSources: [] } : {}),
           },
         });
         const init = await q.initializationResult();
@@ -623,7 +627,7 @@ const probeClaudeCapabilitiesOnce = (
         const { getSettings } = q as ClaudeSettingsQuery;
         const [usageResult, settingsResult] = yield* Effect.all(
           [
-            includeStatus
+            includeUsage
               ? Effect.tryPromise({
                   try: () =>
                     q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
@@ -633,7 +637,7 @@ const probeClaudeCapabilitiesOnce = (
                     new ClaudeCapabilitiesProbeSdkError({ operation: "usage", cause }),
                 }).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.result)
               : Effect.undefined,
-            includeStatus && getSettings
+            includeSettings && getSettings
               ? Effect.tryPromise({
                   try: () => getSettings.call(q),
                   catch: (cause) =>
@@ -693,9 +697,16 @@ const probeClaudeCapabilities = Effect.fn("probeClaudeCapabilities")(function* (
   claudeSettings: ClaudeSettings,
   environment: NodeJS.ProcessEnv = process.env,
   cwd?: string,
+  includeStatus: boolean | "usageOnly" = true,
 ) {
-  const capabilities = yield* probeClaudeCapabilitiesOnce(claudeSettings, environment, cwd);
+  const capabilities = yield* probeClaudeCapabilitiesOnce(
+    claudeSettings,
+    environment,
+    cwd,
+    includeStatus,
+  );
   if (
+    includeStatus === false ||
     !capabilities ||
     !isClaudeFirstPartyOAuth(capabilities) ||
     capabilities.usage?.rate_limits_available ||
@@ -712,7 +723,7 @@ const probeClaudeCapabilities = Effect.fn("probeClaudeCapabilities")(function* (
     claudeSettings,
     { ...environment, CLAUDE_CODE_OAUTH_TOKEN: undefined },
     cwd,
-    true,
+    "usageOnly",
     true,
   ).pipe(Effect.orElseSucceed(() => undefined));
   if (
@@ -771,6 +782,19 @@ export const probeExternalClaudeUsageLimits = Effect.fn("probeExternalClaudeUsag
     return externalClaudeUsageLimitsFromJson(command.stdout, checkedAt);
   },
 );
+/** Fork: a wrapper's quotas stand in only where Claude itself cannot report the account's limits. */
+export const readExternalClaudeUsageIfUnsupported = <E, R>(
+  capabilities: Pick<
+    ClaudeCapabilitiesProbe,
+    "usage" | "subscriptionType" | "tokenSource" | "apiProvider"
+  >,
+  readExternal: Effect.Effect<ExternalClaudeUsageLimits | undefined, E, R>,
+): Effect.Effect<ExternalClaudeUsageLimits | undefined, E, R> =>
+  claudeUsageUnavailableFallback(capabilities).reason === "unsupported" &&
+  !capabilities.usage?.rate_limits_available
+    ? readExternal
+    : Effect.undefined;
+
 /** Read commands from the same cwd Claude uses for a workspace session. */
 export const probeClaudeWorkspaceSnapshot = Effect.fn("probeClaudeWorkspaceSnapshot")(function* (
   claudeSettings: ClaudeSettings,
@@ -941,7 +965,8 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     ),
     capabilities?.effortCapSources ?? [],
   );
-  const skills = yield* discoverClaudeSkills(claudeSettings, cwd, resolvedEnvironment);
+  // Skills are scanned per project when a composer asks (probeClaudeWorkspaceSnapshot), not at startup.
+  const skills: ServerProvider["skills"] = [];
   const slashCommands = [COMPACT_SLASH_COMMAND, ...(capabilities?.slashCommands ?? [])];
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
 
@@ -1013,12 +1038,12 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const usageUnavailable = claudeUsageUnavailableFallback(capabilities);
   const effectiveUsage = capabilities.usage;
   const usageCheckedAt = capabilities.usageCheckedAt ?? checkedAt;
-  const externalUsage =
-    usageUnavailable.reason === "unsupported" && !effectiveUsage?.rate_limits_available
-      ? yield* resolveExternalUsage
-          ? resolveExternalUsage(claudeSettings)
-          : probeExternalClaudeUsageLimits(claudeSettings, resolvedEnvironment)
-      : undefined;
+  const externalUsage = yield* readExternalClaudeUsageIfUnsupported(
+    capabilities,
+    resolveExternalUsage
+      ? resolveExternalUsage(claudeSettings)
+      : probeExternalClaudeUsageLimits(claudeSettings, resolvedEnvironment),
+  );
   const usageLimits =
     externalUsage?.kind === "hidden"
       ? undefined
