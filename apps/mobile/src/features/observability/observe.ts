@@ -53,7 +53,8 @@ if (!crashReportingAvailable) {
       (preferences) =>
         changedSinceLoad()
           ? undefined
-          : setCrashReportsEnabled(preferences.crashReportsEnabled !== false),
+          : // Fork (Razvan): crash reports stay off until the user turns them on.
+            setCrashReportsEnabled(preferences.crashReportsEnabled === true),
       // Observe keeps the last choice it was given, which stands in for the unreadable one.
       (error: unknown) => console.warn("[observe] could not read the crash report setting", error),
     )

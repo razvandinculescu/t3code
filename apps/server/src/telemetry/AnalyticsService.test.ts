@@ -328,6 +328,19 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
       }),
   );
 
+  // Fork (Razvan, 28.11.2026): telemetry is off by default everywhere, not only on CI.
+  // Upstream sends to ingest.t3.codes unless opted out; this guard fails if a merge brings that back.
+  it.effect("fork: sends nothing anywhere unless the environment opts in", () =>
+    Effect.gen(function* () {
+      const onDesktop = (telemetryEnv: Parameters<typeof analyticsLayerWith>[2]) =>
+        sendFor(1, respondWithStatus(204), recordTwentyEvents, undefined, telemetryEnv).pipe(
+          Effect.provideService(HostProcess.Environment, {}),
+        );
+      assert.deepEqual(yield* onDesktop({}), []);
+      assert.equal((yield* onDesktop({ T3CODE_TELEMETRY_ENABLED: true })).length, 1);
+    }),
+  );
+
   it.effect("sends nothing on a CI runner unless the environment opts in", () =>
     Effect.gen(function* () {
       const onCi = (telemetryEnv: Parameters<typeof analyticsLayerWith>[2]) =>

@@ -353,9 +353,8 @@ export const isRelayTracingEnabled = (env: Readonly<Record<string, string | unde
   }).pipe(
     Effect.map(
       ({ telemetry, t3, spec }) =>
-        (telemetry.value ?? !isCiEnvironment(env)) &&
-        !isDoNotTrackSet(env) &&
-        !(t3.value ?? spec.value ?? false),
+        // Fork (Razvan): relay tracing is off unless T3CODE_TELEMETRY_ENABLED=true.
+        (telemetry.value ?? false) && !isDoNotTrackSet(env) && !(t3.value ?? spec.value ?? false),
     ),
     Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(env))),
     Effect.orDie,

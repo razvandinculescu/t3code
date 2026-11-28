@@ -1,5 +1,7 @@
 # Product usage data and diagnostics
 
+> **This fork:** product usage events, relay traces, mobile crash reports, and mobile connection traces are **off by default**. Nothing below is sent unless you set `T3CODE_TELEMETRY_ENABLED=true` (server, desktop) or turn the switches on (mobile). The opt-outs below still apply on top.
+
 T3 Code sends lightweight product usage events and relay connection traces to keep the app reliable and fast. Prompts, responses, file contents, and credentials are never included (unless you explicitly approve an [agent feedback](#agent-feedback) card with conversation text attached).
 
 ## Product usage events
