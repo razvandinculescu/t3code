@@ -10,13 +10,15 @@ import { assert, describe, it } from "@effect/vitest";
 const repoRoot = NodeURL.fileURLToPath(new URL("../../../", import.meta.url));
 
 const TELEMETRY_ENDPOINT =
-  /ingest\.t3\.codes|[a-z0-9.-]*posthog\.com|phc_[A-Za-z0-9]{20,}|api\.axiom\.co|[a-z0-9.-]*sentry\.io|api\.segment\.io|mixpanel\.com|amplitude\.com|datadoghq\.(?:com|eu)|bugsnag\.com|honeycomb\.io|clerk-telemetry\.com/gi;
+  /ingest\.t3\.codes|u\.expo\.dev|[a-z0-9.-]*posthog\.com|phc_[A-Za-z0-9]{20,}|api\.axiom\.co|[a-z0-9.-]*sentry\.io|api\.segment\.io|mixpanel\.com|amplitude\.com|datadoghq\.(?:com|eu)|bugsnag\.com|honeycomb\.io|clerk-telemetry\.com/gi;
 
 const KNOWN: Readonly<Record<string, string>> = {
   "apps/server/src/telemetry/AnalyticsService.ts|ingest.t3.codes":
     "product analytics; fork default off, see AnalyticsService.test 'fork: sends nothing'",
   "apps/server/src/telemetry/AnalyticsService.ts|phc_XOWci4oZP4VvLiEyrFqkFjP4CZn55mjYYBMREK5Wd6m":
     "ingest key for the same analytics; unused while telemetry is off",
+  "apps/mobile/app.config.ts|u.expo.dev":
+    "upstream's EAS Update project; off in the fork, see the expo-updates check below",
   "apps/mobile/app.config.ts|api.axiom.co":
     "relay traces; need a build-time dataset and token the fork never sets, and default off",
   "apps/mobile/src/features/pull-requests/botBadgeImages.ts|api.segment.io":
@@ -69,5 +71,13 @@ describe("fork telemetry guard", () => {
       "new telemetry endpoint: make sure it is off by default in the fork, then add it to KNOWN",
     );
     assert.deepEqual([...found].toSorted(), Object.keys(KNOWN).toSorted());
+  });
+
+  it("keeps the mobile app from checking upstream's EAS updates unless asked", () => {
+    const config = NodeFS.readFileSync(
+      NodePath.join(repoRoot, "apps/mobile/app.config.ts"),
+      "utf8",
+    );
+    assert.match(config, /enabled: repoEnv\.T3CODE_MOBILE_UPDATES_ENABLED === "1",/);
   });
 });
